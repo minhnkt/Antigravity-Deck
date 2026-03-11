@@ -178,6 +178,16 @@ export async function killHeadlessWorkspace(pid: string): Promise<{ killed: bool
     return res.json();
 }
 
+// Kill all Antigravity/Windsurf IDE processes
+export async function killIde(): Promise<{ killed: boolean; platform: string; instancesCleared: number }> {
+    const res = await fetch(`${API_BASE}/api/kill-ide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    });
+    if (!res.ok) throw new Error(`Kill IDE failed: ${res.status}`);
+    return res.json();
+}
+
 // List folders in default workspace root
 export async function getWorkspaceFolders(): Promise<{ root: string; folders: WorkspaceFolder[] }> {
     const res = await fetch(`${API_BASE}/api/workspaces/folders`, { headers: authHeaders() });

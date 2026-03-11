@@ -132,7 +132,7 @@ app.use((req, res, next) => {
 // Rate Limiting
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  max: 10000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
@@ -141,7 +141,7 @@ const generalLimiter = rateLimit({
 
 const strictLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,
+  max: 10000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts, please try again later.' },
@@ -215,6 +215,7 @@ if (AUTH_KEY) {
   // Apply strict rate limiter to sensitive operations
   app.use('/api/settings', strictLimiter);
   app.use('/api/launch-ide', strictLimiter);
+  app.use('/api/kill-ide', strictLimiter);
 } else {
   console.log('  ⚠️  No AUTH_KEY set — API is open (safe for local dev)');
 }

@@ -122,33 +122,13 @@ function setupRoutes(app) {
 
         try {
             if (platform === 'darwin') {
-                // macOS: try Antigravity first, fallback to Windsurf
+                // macOS: open Antigravity app
                 const child = spawn('open', ['-a', 'Antigravity'], {
                     timeout: 10000,
                     detached: true,
                     stdio: 'ignore'
                 });
-
-                child.on('error', () => {
-                    console.log('[*] Antigravity app not found, trying Windsurf...');
-                    const fallback = spawn('open', ['-a', 'Windsurf'], {
-                        timeout: 10000, detached: true, stdio: 'ignore'
-                    });
-                    fallback.on('error', (e) => console.error('[!] Failed to open IDE:', e.message));
-                    fallback.unref();
-                });
-
-                child.on('exit', (code) => {
-                    if (code !== 0 && code !== null) {
-                        console.log(`[*] Antigravity exited with code ${code}, trying Windsurf...`);
-                        const fallback = spawn('open', ['-a', 'Windsurf'], {
-                            timeout: 10000, detached: true, stdio: 'ignore'
-                        });
-                        fallback.on('error', (e) => console.error('[!] Failed to open IDE:', e.message));
-                        fallback.unref();
-                    }
-                });
-
+                child.on('error', (e) => console.error('[!] Failed to open Antigravity:', e.message));
                 child.unref();
             } else {
                 // Windows/Linux
@@ -158,11 +138,7 @@ function setupRoutes(app) {
                     stdio: 'ignore',
                     shell: platform === 'win32',
                 });
-
-                child.on('error', (err) => {
-                    console.error('[!] Failed to launch antigravity:', err.message);
-                });
-
+                child.on('error', (err) => console.error('[!] Failed to launch antigravity:', err.message));
                 child.unref();
             }
 
@@ -170,6 +146,52 @@ function setupRoutes(app) {
         } catch (e) {
             console.error('[!] Launch IDE error:', e.message);
             res.status(500).json({ error: 'Failed to launch IDE' });
+        }
+    });
+
+    // Kill IDE — terminate all Antigravity IDE processes
+    // Security: no user input, rate-limited via strictLimiter in server.js, auth-protected
+    app.post('/api/kill-ide', (req, res) => {
+        const { exec } = require('child_process');
+        const { platform, lsInstances } = require('./config');
+        console.log(`[*] Kill IDE requested (platform: ${platform}, active instances: ${lsInstances.length})`);
+
+        try {
+            if (platform === 'darwin') {
+                // macOS: kill Antigravity processes (case-insensitive)
+                exec('pkill -fi "antigravity" 2>/dev/null', {
+                    timeout: 10000,
+                }, (err) => {
+                    if (err && err.code !== 1) console.error('[!] Kill IDE error:', err.message);
+                });
+            } else if (platform === 'win32') {
+                // Windows: use PowerShell to find and kill Antigravity processes
+                const path = require('path');
+                const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+                const cmd = `"${ps}" -NoProfile -Command "Get-Process | Where-Object { $_.ProcessName -match 'antigravity' } | Stop-Process -Force -ErrorAction SilentlyContinue"`;
+                exec(cmd, { timeout: 10000 }, (err) => {
+                    if (err) console.error('[!] Kill IDE error:', err.message);
+                });
+            } else {
+                // Linux
+                exec('pkill -fi "antigravity" 2>/dev/null', { timeout: 10000 }, () => {});
+            }
+
+            // Clear all LS instances since we killed the processes
+            const killedCount = lsInstances.length;
+            lsInstances.length = 0;
+
+            // Also kill any headless instances
+            try {
+                const { killAllHeadless } = require('./headless-ls');
+                if (killAllHeadless) killAllHeadless();
+            } catch { }
+
+            console.log(`[*] Kill IDE: cleared ${killedCount} LS instances`);
+            res.json({ killed: true, platform, instancesCleared: killedCount });
+        } catch (e) {
+            console.error('[!] Kill IDE error:', e.message);
+            res.status(500).json({ error: 'Failed to kill IDE' });
         }
     });
 
