@@ -116,16 +116,26 @@ if (Test-Path "$DIR\.git") {
             $behind = (git rev-list --count "HEAD..origin/main" 2>$null)
             Write-Host "  [i] $behind new commit(s) available -- pulling..." -ForegroundColor Yellow
 
+            $ErrorActionPreference = "Continue"
             git pull --ff-only 2>$null
+            $ErrorActionPreference = "Stop"
 
             $hashAfter = (git rev-parse HEAD 2>$null)
 
             # List changed files between old and new
-            $updatedFiles = @(git diff --name-only $hashBefore $hashAfter 2>$null)
+            try {
+                $updatedFiles = @(git diff --name-only $hashBefore $hashAfter 2>$null)
+            } catch {
+                $updatedFiles = @()
+            }
             $scenario = "updated"
 
-            $shortNewHash = $hashAfter.Substring(0, 7)
-            Write-Host "  [OK] Updated to $shortNewHash" -ForegroundColor Green
+            if ($hashAfter) {
+                $shortNewHash = $hashAfter.Substring(0, 7)
+                Write-Host "  [OK] Updated to $shortNewHash" -ForegroundColor Green
+            } else {
+                Write-Host "  [OK] Updated successfully" -ForegroundColor Green
+            }
         }
     }
     catch {
