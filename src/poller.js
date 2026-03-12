@@ -144,6 +144,18 @@ async function pollNow() {
                     await pollConversation(cascadeId, info);
                     // Notify frontend to refresh conversation list (summary/title may have changed)
                     _broadcastAll({ type: 'conversations_updated' });
+
+                    // Post-completion polling: LS takes time to finalize content (summary, title, last steps).
+                    // Schedule 5 extra polls at 1s intervals to catch late updates.
+                    const postPollInfo = { ...info };
+                    for (let pp = 0; pp < 5; pp++) {
+                        setTimeout(async () => {
+                            try {
+                                await pollConversation(cascadeId, postPollInfo);
+                                _broadcastAll({ type: 'conversations_updated' });
+                            } catch { /* ignore — best effort */ }
+                        }, (pp + 1) * 1000);
+                    }
                 }
 
                 // Fast-cascade relay: first time seeing this cascade and it's already IDLE/DONE
