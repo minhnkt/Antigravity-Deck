@@ -46,6 +46,9 @@ function setupWebSocket(wss, { ensureCached, stepCache }) {
                     // Live Logs mode: receive all broadcasts regardless of conversation
                     globalViewers.add(ws);
                     console.log(`[WS] subscribe_all — global viewers: ${globalViewers.size}`);
+                } else if (msg.type === 'app_log') {
+                    // Frontend error/log forwarding — rebroadcast to all Live Logs viewers
+                    broadcastToGlobal({ ...msg, ts: msg.ts || Date.now() });
                 }
             } catch (e) { }
         });
@@ -86,4 +89,12 @@ function broadcastAll(data) {
     });
 }
 
-module.exports = { setupWebSocket, sendToOne, broadcast, broadcastAll };
+// Broadcast to global viewers only (Live Logs subscribers — for app_log events)
+function broadcastToGlobal(data) {
+    const msg = JSON.stringify(data);
+    globalViewers.forEach(v => {
+        if (v.readyState === 1) v.send(msg);
+    });
+}
+
+module.exports = { setupWebSocket, sendToOne, broadcast, broadcastAll, broadcastToGlobal };

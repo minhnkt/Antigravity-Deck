@@ -1,4 +1,5 @@
 // === AntigravityAuto Server — Entry Point ===
+const logger = require('./src/logger'); // MUST be first — intercepts console.* globally
 const express = require('express');
 const http = require('http');
 const crypto = require('crypto');
@@ -224,6 +225,9 @@ if (AUTH_KEY) {
 // Routes & WebSocket
 setupRoutes(app);
 setupWebSocket(wss);
+
+// Connect logger → broadcast app_log events to Live Logs viewers
+logger.connect(require('./src/ws').broadcastToGlobal);
 
 // Start
 server.listen(PORT, async () => {

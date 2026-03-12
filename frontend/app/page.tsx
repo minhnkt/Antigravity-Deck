@@ -30,6 +30,7 @@ import { SourceControlView } from '@/components/source-control-view';
 import { ResourceMonitorView } from '@/components/resource-monitor-view';
 import { WorkspaceOnboardModal } from '@/components/workspace-onboard-modal';
 import { notificationService } from '@/lib/notifications';
+import { initAppLogger } from '@/lib/app-logger';
 import { usePwaInstall } from '@/hooks/use-pwa-install';
 import { getSettings } from '@/lib/cascade-api';
 
@@ -104,9 +105,10 @@ export default function Home() {
   });
   const [showShortcuts, setShowShortcuts] = useState(false);
 
-  // === PWA Notification service init ===
+  // === PWA Notification service init + App Logger ===
   useEffect(() => {
     notificationService?.init();
+    initAppLogger();
   }, []);
 
   // === PWA Install ===

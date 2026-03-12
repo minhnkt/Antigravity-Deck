@@ -7,6 +7,7 @@ import {
     Activity, User, Bot, Wrench, Filter, Trash2,
     Wifi, WifiOff, ChevronDown, ChevronRight,
     Terminal, FileCode2, Search, Eye, Globe, Copy, Check,
+    AlertTriangle, Bug, Info, Server, Monitor,
 } from 'lucide-react';
 
 // ─── Step type classification ─────────────────────────────────────────────────
@@ -89,6 +90,11 @@ interface LogEvent {
     stepLabel?: string;
     stepContent?: string;
     stepIndex?: number;
+    // For app_log events
+    logLevel?: 'info' | 'warn' | 'error';
+    logSource?: 'frontend' | 'backend';
+    logModule?: string;
+    logStack?: string;
 }
 
 // ─── Extract readable content from a step ────────────────────────────────────
@@ -139,11 +145,133 @@ function extractContent(step: any, type: string): string {
     return '';
 }
 
-// ─── Log Item component ───────────────────────────────────────────────────────
+// ─── Log Level config ─────────────────────────────────────────────────────────
+
+const LOG_LEVEL_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string; border: string }> = {
+    error: { icon: Bug, color: 'text-red-400', bg: 'bg-red-400/8', border: 'border-red-400/20' },
+    warn: { icon: AlertTriangle, color: 'text-amber-400', bg: 'bg-amber-400/8', border: 'border-amber-400/20' },
+    info: { icon: Info, color: 'text-sky-400', bg: 'bg-sky-400/5', border: 'border-sky-400/15' },
+};
+
+const SOURCE_CONFIG: Record<string, { icon: React.ElementType; label: string; color: string }> = {
+    backend: { icon: Server, label: 'BE', color: 'text-violet-400' },
+    frontend: { icon: Monitor, label: 'FE', color: 'text-cyan-400' },
+};
+
+// ─── App Log Item component ──────────────────────────────────────────────────
+
+const AppLogItem = memo(function AppLogItem({ event }: { event: LogEvent }) {
+    const [expanded, setExpanded] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const levelCfg = LOG_LEVEL_CONFIG[event.logLevel || 'info'] || LOG_LEVEL_CONFIG.info;
+    const srcCfg = SOURCE_CONFIG[event.logSource || 'backend'] || SOURCE_CONFIG.backend;
+    const LevelIcon = levelCfg.icon;
+    const time = new Date(event.ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const hasStack = !!event.logStack;
+    const hasContext = event.payload?.context && Object.keys(event.payload.context).length > 0;
+    const hasDetail = hasStack || hasContext;
+    const message = event.stepContent || '';
+    const preview = message.length > 200 ? message.slice(0, 200) + '…' : message;
+
+    const copyAll = () => {
+        const text = [
+            `[${event.logLevel?.toUpperCase()}] [${event.logSource}/${event.logModule}]`,
+            message,
+            event.logStack ? `\nStack:\n${event.logStack}` : '',
+            hasContext ? `\nContext:\n${JSON.stringify(event.payload?.context, null, 2)}` : '',
+        ].filter(Boolean).join('\n');
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+    };
+
+    return (
+        <div className={cn('group border-b transition-colors hover:bg-muted/10', levelCfg.bg, levelCfg.border, 'border-l-2')}>
+            <div
+                className="flex items-start gap-2.5 px-3 py-1.5 cursor-pointer"
+                onClick={() => hasDetail && setExpanded(e => !e)}
+            >
+                {/* Level icon */}
+                <div className="flex flex-col items-center gap-1 pt-0.5 shrink-0">
+                    <LevelIcon className={cn('w-3.5 h-3.5', levelCfg.color)} />
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* Source badge */}
+                        <span className={cn(
+                            'text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded',
+                            event.logSource === 'frontend' ? 'bg-cyan-400/10 text-cyan-400' : 'bg-violet-400/10 text-violet-400'
+                        )}>
+                            {srcCfg.label}
+                        </span>
+                        {/* Module name */}
+                        {event.logModule && event.logModule !== 'unknown' && (
+                            <span className="text-[9px] text-muted-foreground/50 font-mono">{event.logModule}</span>
+                        )}
+                        <span className="ml-auto text-[9px] text-muted-foreground/25 font-mono shrink-0">{time}</span>
+                        {hasDetail && (
+                            <span className="text-muted-foreground/30">
+                                {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                            </span>
+                        )}
+                    </div>
+                    {preview && (
+                        <p className={cn('text-xs mt-0.5 break-words leading-relaxed line-clamp-3',
+                            event.logLevel === 'error' ? 'text-red-300/80' : event.logLevel === 'warn' ? 'text-amber-300/70' : 'text-foreground/50'
+                        )}>
+                            {preview}
+                        </p>
+                    )}
+                </div>
+
+                {/* Copy button */}
+                <button
+                    onClick={(e) => { e.stopPropagation(); copyAll(); }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1 rounded hover:bg-muted/30"
+                    title="Copy full log entry"
+                >
+                    {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-muted-foreground/40" />}
+                </button>
+            </div>
+
+            {/* Expanded: stack trace + context */}
+            {expanded && (
+                <div className="mx-3 mb-2 space-y-1">
+                    {event.logStack && (
+                        <div className={cn('rounded border overflow-auto max-h-40', levelCfg.border)}>
+                            <pre className={cn('text-[10px] font-mono p-2 whitespace-pre-wrap break-all leading-relaxed',
+                                event.logLevel === 'error' ? 'text-red-300/60' : 'text-foreground/40'
+                            )}>
+                                {event.logStack}
+                            </pre>
+                        </div>
+                    )}
+                    {hasContext && (
+                        <div className="rounded border border-border/15 overflow-auto max-h-32">
+                            <pre className="text-[10px] font-mono text-foreground/40 p-2 whitespace-pre-wrap break-all leading-relaxed">
+                                {JSON.stringify(event.payload?.context, null, 2)}
+                            </pre>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+});
+
+// ─── Step Log Item component ─────────────────────────────────────────────────
 
 const LogItem = memo(function LogItem({ event }: { event: LogEvent }) {
     const [expanded, setExpanded] = useState(false);
     const [copied, setCopied] = useState(false);
+
+    // Render app_log events with the dedicated component
+    if (event.type === 'app_log') {
+        return <AppLogItem event={event} />;
+    }
 
     if (event.type === 'cascade_status') {
         const status = event.payload?.status || '';
@@ -243,10 +371,12 @@ const LogItem = memo(function LogItem({ event }: { event: LogEvent }) {
 
 // ─── Filter pill ─────────────────────────────────────────────────────────────
 
-type FilterMode = 'all' | 'user' | 'agent' | 'tool';
+type FilterMode = 'all' | 'user' | 'agent' | 'tool' | 'errors' | 'logs';
 
-const FILTERS: { mode: FilterMode; label: string }[] = [
+const FILTERS: { mode: FilterMode; label: string; icon?: React.ElementType }[] = [
     { mode: 'all', label: 'All' },
+    { mode: 'errors', label: 'Errors', icon: Bug },
+    { mode: 'logs', label: 'Logs', icon: Terminal },
     { mode: 'user', label: 'User' },
     { mode: 'agent', label: 'Agent' },
     { mode: 'tool', label: 'Tools' },
@@ -284,7 +414,19 @@ export function AgentLogsView() {
         const offAll = wsService.onAll((data) => {
             const convId = (data.conversationId as string) || (data.cascadeId as string) || '';
 
-            if (data.type === 'cascade_status') {
+            if (data.type === 'app_log') {
+                // App log event from FE or BE
+                addEvent({
+                    type: 'app_log',
+                    convId: '',
+                    stepContent: (data.message as string) || '',
+                    logLevel: (data.level as 'info' | 'warn' | 'error') || 'info',
+                    logSource: (data.source as 'frontend' | 'backend') || 'backend',
+                    logModule: (data.module as string) || 'unknown',
+                    logStack: (data.stack as string) || undefined,
+                    payload: data,
+                });
+            } else if (data.type === 'cascade_status') {
                 addEvent({ type: 'cascade_status', convId, payload: data });
             } else if (data.type === 'conversations_updated') {
                 addEvent({ type: 'conversations_updated', convId: '', payload: data });
@@ -342,12 +484,20 @@ export function AgentLogsView() {
 
     const filtered = filter === 'all'
         ? events
-        : events.filter(e =>
-            (filter === 'user' && e.stepRole === 'user') ||
-            (filter === 'agent' && e.stepRole === 'agent') ||
-            (filter === 'tool' && e.stepRole === 'tool') ||
-            e.type === 'cascade_status'
-        );
+        : events.filter(e => {
+            if (filter === 'errors') return e.type === 'app_log' && (e.logLevel === 'error' || e.logLevel === 'warn');
+            if (filter === 'logs') return e.type === 'app_log';
+            return (
+                (filter === 'user' && e.stepRole === 'user') ||
+                (filter === 'agent' && e.stepRole === 'agent') ||
+                (filter === 'tool' && e.stepRole === 'tool') ||
+                e.type === 'cascade_status'
+            );
+        });
+
+    // Count errors/warnings for badge
+    const errorCount = events.filter(e => e.type === 'app_log' && e.logLevel === 'error').length;
+    const warnCount = events.filter(e => e.type === 'app_log' && e.logLevel === 'warn').length;
 
     return (
         <div className="flex flex-col h-full bg-background">
@@ -374,6 +524,16 @@ export function AgentLogsView() {
                     </span>
                     {events.length > 0 && (
                         <span className="text-[9px] text-muted-foreground/30 font-mono">{events.length}</span>
+                    )}
+                    {errorCount > 0 && (
+                        <span className="flex items-center gap-0.5 text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-red-400/10 text-red-400 border border-red-400/20">
+                            <Bug className="w-2.5 h-2.5" />{errorCount}
+                        </span>
+                    )}
+                    {warnCount > 0 && (
+                        <span className="flex items-center gap-0.5 text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20">
+                            <AlertTriangle className="w-2.5 h-2.5" />{warnCount}
+                        </span>
                     )}
                 </div>
 
