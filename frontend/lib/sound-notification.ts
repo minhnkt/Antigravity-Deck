@@ -105,19 +105,172 @@ class SoundNotificationService {
   // --- Lifecycle (init/unlock/destroy in Task 4) ---
 
   init(): void {
-    // Placeholder — filled in Task 4
+    if (this._initialized) return;
+    this._initialized = true;
+
+    // Create AudioContext
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (AC) {
+      this.audioContext = new AC();
+    }
+
+    // Pre-load sound buffers
+    for (const [eventId, path] of Object.entries(SOUND_FILES)) {
+      this.loadBuffer(eventId, path);
+    }
+
+    // Subscribe to WS events (all cascades — no convId filter)
+    if (wsService) {
+      this.unsubscribers.push(
+        wsService.on('cascade_status', (data) => {
+          const convId = data.conversationId as string;
+          const newStatus = data.status as string;
+          if (!convId || !newStatus) return;
+          this.handleCascadeStatus(convId, newStatus);
+        })
+      );
+      this.unsubscribers.push(
+        wsService.on('auto_accepted', (data) => {
+          const convId = data.conversationId as string;
+          if (!convId) return;
+          this.playInternal('auto-accepted', convId);
+        })
+      );
+    }
+  }
+
+  private handleCascadeStatus(convId: string, newStatus: string): void {
+    const prev = this.statuses.get(convId);
+    this.statuses.set(convId, newStatus);
+
+    // Smart init: first event for this conv is seed — skip if status unchanged
+    if (this.initSeeded.has(convId)) {
+      this.initSeeded.delete(convId);
+      if (prev === newStatus) return; // duplicate baseline, no sound
+      // Status actually changed — fall through to play
+    }
+
+    // First time seeing this conv (no prev) — seed it, no sound
+    if (prev === undefined) {
+      this.initSeeded.add(convId);
+      return;
+    }
+
+    // Cascade complete: prev was active, now terminal success
+    if (ACTIVE_STATUSES.includes(prev) && COMPLETE_STATUSES.includes(newStatus)) {
+      this.playInternal('cascade-complete', convId);
+      return;
+    }
+
+    // Waiting for user
+    if (newStatus === 'CASCADE_RUN_STATUS_WAITING_FOR_USER' && prev !== 'CASCADE_RUN_STATUS_WAITING_FOR_USER') {
+      this.playInternal('waiting-for-user', convId);
+      return;
+    }
+
+    // Error
+    if (ERROR_STATUSES.includes(newStatus) && !ERROR_STATUSES.includes(prev)) {
+      this.playInternal('error', convId);
+      return;
+    }
+  }
+
+  private async playInternal(eventId: string, convId: string): Promise<void> {
+    if (!this._settings.enabled) return;
+    if (SUPPRESSED_BY_DEFAULT.has(eventId)) return; // Phase 1: auto-accepted OFF by default
+
+    // Debounce: same event + same conv within 3s
+    const key = `${eventId}:${convId}`;
+    const now = Date.now();
+    if (now - (this.lastPlayTime.get(key) || 0) < DEBOUNCE_MS) return;
+    this.lastPlayTime.set(key, now);
+
+    const volume = this._settings.volume / 100;
+
+    // Try Web Audio API first
+    if (this.audioContext) {
+      try {
+        if (this.audioContext.state === 'suspended') {
+          await this.audioContext.resume();
+        }
+        const buffer = this.buffers.get(eventId);
+        if (buffer) {
+          const source = this.audioContext.createBufferSource();
+          const gain = this.audioContext.createGain();
+          source.buffer = buffer;
+          gain.gain.value = volume;
+          source.connect(gain);
+          gain.connect(this.audioContext.destination);
+          source.start(0);
+          return;
+        }
+      } catch {
+        // Fall through to HTML5 Audio
+      }
+    }
+
+    // Fallback: HTML5 Audio
+    try {
+      const path = SOUND_FILES[eventId];
+      if (path) {
+        const audio = new Audio(path);
+        audio.volume = volume;
+        await audio.play();
+      }
+    } catch {
+      console.warn(`[Sound] Could not play sound for ${eventId}`);
+    }
+  }
+
+  private async loadBuffer(eventId: string, path: string): Promise<void> {
+    if (!this.audioContext) return;
+    try {
+      const response = await fetch(path);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+      this.buffers.set(eventId, audioBuffer);
+    } catch {
+      console.warn(`[Sound] Failed to preload ${path}`);
+    }
   }
 
   unlock(): void {
-    // Placeholder — filled in Task 4
+    if (this._unlocked) return;
+    if (!this.audioContext) return;
+    this._unlocked = true;
+
+    // Resume AudioContext (required by iOS Safari autoplay policy)
+    this.audioContext.resume().catch(() => {});
+
+    // Play a silent buffer to fully "unlock" the audio pipeline
+    try {
+      const buffer = this.audioContext.createBuffer(1, 1, 22050);
+      const source = this.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.audioContext.destination);
+      source.start(0);
+    } catch {
+      // Ignore — unlock is best-effort
+    }
   }
 
   testSound(): void {
-    // Placeholder — filled in Task 4
+    if (!this._settings.enabled) return;
+    // Bypass debounce for test — use a unique convId
+    this.playInternal('cascade-complete', `__test__${Date.now()}`);
   }
 
   destroy(): void {
-    // Placeholder — filled in Task 4
+    this.unsubscribers.forEach(unsub => unsub());
+    this.unsubscribers = [];
+    this.audioContext?.close().catch(() => {});
+    this.audioContext = null;
+    this.buffers.clear();
+    this.statuses.clear();
+    this.initSeeded.clear();
+    this.lastPlayTime.clear();
+    this._initialized = false;
+    this._unlocked = false;
   }
 }
 
