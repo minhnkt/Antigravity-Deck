@@ -125,14 +125,33 @@ export function useWebSocket() {
         });
 
         const offStepsInit = wsService.on('steps_init', (data) => {
-            console.log('[WS] steps_init:', (data.steps as Step[])?.length, 'for', (data.conversationId as string)?.substring(0, 8), 'baseIndex:', data.baseIndex, 'stepCount:', data.stepCount);
             setState(prev => {
                 if (data.conversationId && data.conversationId !== prev.currentConvId) return prev;
+                const incoming = (data.steps as Step[]) || [];
+                const incomingBase = (data.baseIndex as number) ?? 0;
+                const incomingCount = (data.stepCount as number) ?? incoming.length;
+
+                // Merge: if same base+length, only update steps that actually changed
+                // Prevents visible re-render on auto-refresh after cascade completion
+                if (prev.baseIndex === incomingBase && prev.steps.length === incoming.length) {
+                    let anyChanged = false;
+                    const merged = prev.steps.map((oldStep, i) => {
+                        if (i >= incoming.length - 5 && JSON.stringify(oldStep) !== JSON.stringify(incoming[i])) {
+                            anyChanged = true;
+                            return incoming[i];
+                        }
+                        return oldStep;
+                    });
+                    if (!anyChanged) return prev;
+                    return { ...prev, steps: merged, stepCount: incomingCount, lastUpdate: new Date().toLocaleTimeString() };
+                }
+
+                // Different base/length — full replacement (initial load, conversation switch)
                 return {
                     ...prev,
-                    steps: (data.steps as Step[]) || [],
-                    baseIndex: (data.baseIndex as number) ?? 0,
-                    stepCount: (data.stepCount as number) ?? ((data.steps as Step[])?.length || 0),
+                    steps: incoming,
+                    baseIndex: incomingBase,
+                    stepCount: incomingCount,
                     lastUpdate: new Date().toLocaleTimeString(),
                 };
             });
@@ -194,7 +213,20 @@ export function useWebSocket() {
         const offCascadeStatus = wsService.on('cascade_status', (data) => {
             setState(prev => {
                 if (data.conversationId && data.conversationId !== prev.currentConvId) return prev;
-                return { ...prev, cascadeStatus: data.status as string };
+                const newState = { ...prev, cascadeStatus: data.status as string };
+                const isDone = data.status !== 'CASCADE_RUN_STATUS_RUNNING' &&
+                               data.status !== 'CASCADE_RUN_STATUS_WAITING_FOR_USER';
+                if (isDone && prev.cascadeStatus && prev.cascadeStatus !== data.status) {
+                    newState.conversationsVersion = prev.conversationsVersion + 1;
+                    // Auto re-sync step content: backend just invalidated cache,
+                    // re-send set_conversation to get fresh steps_init with finalized data.
+                    // steps_init handler uses merge (not replace) so no visible flicker.
+                    const convId = prev.currentConvId;
+                    if (convId) {
+                        wsService?.send({ type: 'set_conversation', conversationId: convId });
+                    }
+                }
+                return newState;
             });
         });
 
