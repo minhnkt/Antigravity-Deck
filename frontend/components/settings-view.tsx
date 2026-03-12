@@ -259,28 +259,64 @@ export function SettingsView() {
                             <Bell className="h-3.5 w-3.5" /> Push Notifications
                         </CardTitle>
                         <CardDescription className="text-[10px]">
-                            Get OS-level notifications when cascades complete, error, or need attention.
+                            Get OS-level notifications when cascades complete, error, or need attention — even when the tab is minimized.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        {/* Permission status */}
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs">Browser permission</span>
-                            {notiPermission === 'granted' ? (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Granted</span>
-                            ) : notiPermission === 'denied' ? (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">Blocked</span>
-                            ) : (
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-xs h-6"
-                                    onClick={() => notificationService?.requestPermission()}
-                                >
-                                    Request Permission
-                                </Button>
-                            )}
-                        </div>
+
+                        {/* Step 1: Permission setup — prominent section */}
+                        {notiPermission !== 'granted' && (
+                            <div className="rounded-lg border border-border/50 bg-muted/30 p-3 space-y-3">
+                                <div className="flex items-start gap-2">
+                                    <span className="text-lg mt-0.5">🔔</span>
+                                    <div className="space-y-1">
+                                        <p className="text-xs font-medium">Enable browser notifications</p>
+                                        <p className="text-[10px] text-muted-foreground leading-relaxed">
+                                            {notiPermission === 'denied' ? (
+                                                <>Notifications are <strong className="text-red-400">blocked</strong> by your browser. To fix this:</>
+                                            ) : (
+                                                <>Click the button below to allow notifications. This works on both desktop and mobile browsers.</>
+                                            )}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {notiPermission === 'denied' ? (
+                                    <div className="space-y-2 pl-7">
+                                        <div className="text-[10px] text-muted-foreground space-y-1">
+                                            <p><strong>Desktop (Chrome/Edge):</strong> Click the 🔒 icon in the address bar → Site settings → Notifications → Allow</p>
+                                            <p><strong>Mobile (Chrome):</strong> Tap ⋮ menu → Settings → Site settings → Notifications → find this site → Allow</p>
+                                            <p><strong>Safari (iOS):</strong> Go to Settings → Safari → Notifications → find this site → Allow</p>
+                                        </div>
+                                        <p className="text-[10px] text-amber-400/80">After changing the setting, refresh this page.</p>
+                                    </div>
+                                ) : (
+                                    <Button
+                                        variant="default"
+                                        size="sm"
+                                        className="ml-7 text-xs h-8 gap-1.5"
+                                        onClick={async () => {
+                                            await notificationService?.requestPermission();
+                                            // Auto-enable if permission was just granted
+                                            if (notificationService?.getPermission() === 'granted') {
+                                                notificationService?.setEnabled(true);
+                                            }
+                                        }}
+                                    >
+                                        <Bell className="h-3.5 w-3.5" />
+                                        Allow Notifications
+                                    </Button>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Permission granted badge */}
+                        {notiPermission === 'granted' && (
+                            <div className="flex items-center gap-2 text-[10px] text-emerald-400">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                Notifications permitted — you're all set!
+                            </div>
+                        )}
 
                         {/* Master toggle */}
                         <div className="flex items-center justify-between">
@@ -288,9 +324,14 @@ export function SettingsView() {
                             <Switch
                                 checked={notiSettings.enabled}
                                 onCheckedChange={(checked) => {
-                                    notificationService?.setEnabled(checked);
+                                    if (checked && notiPermission !== 'granted') {
+                                        notificationService?.requestPermission().then((p) => {
+                                            if (p === 'granted') notificationService?.setEnabled(true);
+                                        });
+                                    } else {
+                                        notificationService?.setEnabled(checked);
+                                    }
                                 }}
-                                disabled={notiPermission === 'denied'}
                             />
                         </div>
 
@@ -326,6 +367,11 @@ export function SettingsView() {
                         >
                             Test Notification
                         </Button>
+
+                        {/* PWA install hint */}
+                        <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+                            💡 <strong>Tip:</strong> For the best experience, install this app as a PWA — click the install icon in your browser's address bar, or use "Add to Home Screen" on mobile.
+                        </p>
                     </CardContent>
                 </Card>
 

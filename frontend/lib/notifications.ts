@@ -1,6 +1,7 @@
 'use client';
 
 import { wsService } from './ws-service';
+import { updateSettings, getSettings } from './cascade-api';
 
 // === Types ===
 
@@ -148,6 +149,8 @@ class NotificationService {
       // localStorage full or blocked
     }
     window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
+    // Persist to server (fire-and-forget)
+    updateSettings({ notifications: this._settings }).catch(() => {});
   }
 
   // --- Lifecycle ---
@@ -164,6 +167,28 @@ class NotificationService {
       } catch (e) {
         console.warn('[Notifications] SW registration failed:', e);
       }
+    }
+
+    // Load settings from server (overrides localStorage if available)
+    try {
+      const serverSettings = await getSettings();
+      if (serverSettings.notifications && typeof serverSettings.notifications === 'object') {
+        const ns = serverSettings.notifications as Record<string, unknown>;
+        this._settings = {
+          enabled: typeof ns.enabled === 'boolean' ? ns.enabled : this._settings.enabled,
+          events: {
+            cascadeComplete: typeof (ns.events as Record<string, unknown>)?.cascadeComplete === 'boolean' ? (ns.events as Record<string, boolean>).cascadeComplete : this._settings.events.cascadeComplete,
+            waitingForUser: typeof (ns.events as Record<string, unknown>)?.waitingForUser === 'boolean' ? (ns.events as Record<string, boolean>).waitingForUser : this._settings.events.waitingForUser,
+            error: typeof (ns.events as Record<string, unknown>)?.error === 'boolean' ? (ns.events as Record<string, boolean>).error : this._settings.events.error,
+            autoAccepted: typeof (ns.events as Record<string, unknown>)?.autoAccepted === 'boolean' ? (ns.events as Record<string, boolean>).autoAccepted : this._settings.events.autoAccepted,
+          },
+        };
+        // Sync to localStorage
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this._settings)); } catch {}
+        window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
+      }
+    } catch {
+      // Server unavailable, use localStorage fallback
     }
 
     // Subscribe to WS events (same pattern as SoundNotificationService)
