@@ -5,7 +5,7 @@ import { authHeaders } from '@/lib/auth';
 import { getSettings, updateSettings } from '@/lib/cascade-api';
 import type { AppSettings } from '@/lib/cascade-api';
 import { cn } from '@/lib/utils';
-import { Check, X, Sparkles, CircleDot, Bot, Settings, Globe, Camera, Star, Volume2, Bell } from 'lucide-react';
+import { Check, X, Sparkles, CircleDot, Bot, Settings, Globe, Camera, Star, Bell } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -22,7 +22,6 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { soundService, SETTINGS_CHANGED_EVENT } from '@/lib/sound-notification';
 import { notificationService, NOTIFICATION_SETTINGS_CHANGED } from '@/lib/notifications';
 import type { NotificationSettings } from '@/lib/notifications';
 
@@ -43,22 +42,6 @@ export function SettingsView() {
     const [saving, setSaving] = useState(false);
     const [saveMsg, setSaveMsg] = useState('');
     const [loading, setLoading] = useState(true);
-
-    // === Sound notification settings (localStorage, not server) ===
-    const [soundEnabled, setSoundEnabled] = useState(() => soundService?.getSettings().enabled ?? false);
-    const [soundVolume, setSoundVolume] = useState(() => soundService?.getSettings().volume ?? 70);
-
-    // Sync from soundService when settings change externally (e.g. quick toggle)
-    useEffect(() => {
-        const handler = () => {
-            if (!soundService) return;
-            const s = soundService.getSettings();
-            setSoundEnabled(s.enabled);
-            setSoundVolume(s.volume);
-        };
-        window.addEventListener(SETTINGS_CHANGED_EVENT, handler);
-        return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, handler);
-    }, []);
 
     // === Push notification settings (localStorage, not server) ===
     const [notiSettings, setNotiSettings] = useState<NotificationSettings>(() =>
@@ -266,55 +249,6 @@ export function SettingsView() {
                             placeholder="C:\Users\you\Workspaces"
                             className="font-mono text-xs"
                         />
-                    </CardContent>
-                </Card>
-
-                {/* Sound Notifications */}
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
-                            <Volume2 className="h-3.5 w-3.5" /> Sound Notifications
-                        </CardTitle>
-                        <CardDescription className="text-[10px]">
-                            Play sounds when cascades complete, error, or need attention. Settings are per-device.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs">Enable sound notifications</span>
-                            <Switch
-                                checked={soundEnabled}
-                                onCheckedChange={(checked) => {
-                                    setSoundEnabled(checked);
-                                    soundService?.setEnabled(checked);
-                                }}
-                            />
-                        </div>
-                        <div className={cn("space-y-2", !soundEnabled && "opacity-40 pointer-events-none")}>
-                            <div className="flex items-center justify-between">
-                                <span className="text-xs">Volume</span>
-                                <span className="text-[10px] text-muted-foreground font-mono">{soundVolume}%</span>
-                            </div>
-                            <Slider
-                                value={[soundVolume]}
-                                onValueChange={([v]) => {
-                                    setSoundVolume(v);
-                                    soundService?.setVolume(v);
-                                }}
-                                max={100}
-                                step={1}
-                                className="w-full"
-                            />
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="text-xs h-7"
-                                onClick={() => soundService?.testSound()}
-                                disabled={!soundEnabled}
-                            >
-                                Test Sound
-                            </Button>
-                        </div>
                     </CardContent>
                 </Card>
 

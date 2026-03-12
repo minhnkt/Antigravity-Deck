@@ -21,9 +21,8 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star, Volume2, VolumeX } from 'lucide-react';
+import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
-import { soundService, SETTINGS_CHANGED_EVENT } from '@/lib/sound-notification';
 import { notificationService, NOTIFICATION_SETTINGS_CHANGED } from '@/lib/notifications';
 
 // === Props ===
@@ -111,17 +110,6 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
     const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
     const [showWorkflows, setShowWorkflows] = useState(false);
     const [workflowQuery, setWorkflowQuery] = useState('');
-
-    // === Sound quick toggle ===
-    const [soundEnabled, setSoundEnabled] = useState(() => soundService?.getSettings().enabled ?? false);
-
-    useEffect(() => {
-        const handler = () => {
-            setSoundEnabled(soundService?.getSettings().enabled ?? false);
-        };
-        window.addEventListener(SETTINGS_CHANGED_EVENT, handler);
-        return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, handler);
-    }, []);
 
     // === Notification quick toggle ===
     const [notificationsEnabled, setNotificationsEnabled] = useState(() => notificationService?.getSettings().enabled ?? false);
@@ -704,18 +692,6 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                             {notificationsEnabled
                                                 ? <><BellOff className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Disable Notifications</>
                                                 : <><Bell className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Enable Notifications</>}
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem
-                                            onClick={() => {
-                                                const next = !soundEnabled;
-                                                setSoundEnabled(next);
-                                                soundService?.setEnabled(next);
-                                            }}
-                                            className="cursor-pointer"
-                                        >
-                                            {soundEnabled
-                                                ? <><VolumeX className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Disable Sound</>
-                                                : <><Volume2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Enable Sound</>}
                                         </DropdownMenuItem>
                                         <DropdownMenuSeparator className="bg-white/5" />
                                         <DropdownMenuItem
