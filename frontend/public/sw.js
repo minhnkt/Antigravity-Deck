@@ -64,6 +64,29 @@ self.addEventListener('message', (event) => {
   }
 });
 
+// === Web Push — notification from server (works even when tab is closed) ===
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data?.json() || {};
+  } catch {
+    data = { title: 'Antigravity Deck', body: event.data?.text() || 'New notification' };
+  }
+
+  const title = data.title || 'Antigravity Deck';
+  const options = {
+    body: data.body || '',
+    icon: '/favicon.ico',
+    badge: '/favicon.ico',
+    tag: data.tag || 'ag-push',
+    renotify: true,
+    requireInteraction: false,
+    data: data.data || {},
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
 // === Notification click — focus or open the app ===
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

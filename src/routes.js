@@ -323,6 +323,15 @@ function setupRoutes(app) {
         defaultModel: z.string().max(100).optional(),
         activeProfile: z.string().max(100).nullable().optional(),
         profilesDir: z.string().max(500).nullable().optional(),
+        notifications: z.object({
+            enabled: z.boolean().optional(),
+            events: z.object({
+                cascadeComplete: z.boolean().optional(),
+                waitingForUser: z.boolean().optional(),
+                error: z.boolean().optional(),
+                autoAccepted: z.boolean().optional(),
+            }).optional(),
+        }).optional(),
     }).strict();
 
     app.post('/api/settings', (req, res) => {
@@ -341,6 +350,36 @@ function setupRoutes(app) {
             }
             throw error;
         }
+    });
+
+    // --- Web Push Notification API ---
+    const pushService = require('./push-service');
+
+    // Public — no auth needed (returns only the public key)
+    app.get('/api/push/vapid-public-key', (req, res) => {
+        const key = pushService.getVapidPublicKey();
+        if (!key) return res.status(503).json({ error: 'Push not configured' });
+        res.json({ publicKey: key });
+    });
+
+    // Save push subscription from browser
+    app.post('/api/push/subscribe', (req, res) => {
+        const subscription = req.body;
+        if (!subscription?.endpoint) {
+            return res.status(400).json({ error: 'Invalid subscription: missing endpoint' });
+        }
+        const added = pushService.addSubscription(subscription);
+        res.json({ success: true, added });
+    });
+
+    // Remove push subscription
+    app.post('/api/push/unsubscribe', (req, res) => {
+        const { endpoint } = req.body || {};
+        if (!endpoint) {
+            return res.status(400).json({ error: 'endpoint required' });
+        }
+        const removed = pushService.removeSubscription(endpoint);
+        res.json({ success: true, removed });
     });
 
     // Workspace list — all detected LS instances

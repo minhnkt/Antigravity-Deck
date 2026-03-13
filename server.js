@@ -238,6 +238,13 @@ logger.connect(require('./src/ws').broadcastToGlobal);
 // Start
 server.listen(PORT, async () => {
   console.log(`\n  💬 Antigravity Deck (API) running at http://localhost:${PORT}\n`);
+  // Initialize Web Push VAPID keys
+  try {
+    const { initVapid } = require('./src/push-service');
+    initVapid();
+  } catch (e) {
+    console.warn('  ⚠️  Push service init failed:', e.message);
+  }
   await init(() => startPolling());
   const { startResourceMonitor } = require('./src/resource-monitor');
   startResourceMonitor();

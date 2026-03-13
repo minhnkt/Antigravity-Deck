@@ -67,18 +67,21 @@ function sendToOne(ws, data) {
 
 function broadcast(data, targetConvId) {
     const msg = JSON.stringify(data);
+    const sent = new Set();
     // Send to viewers watching this specific conversation
     viewers.forEach(v => {
         if (v.readyState !== 1) return;
         if (targetConvId && clientConvMap.get(v) !== targetConvId) return;
         v.send(msg);
+        sent.add(v);
     });
     // Also send to global viewers (Live Logs — all cascades)
+    // Skip clients that already received via per-conversation match above
     globalViewers.forEach(v => {
         if (v.readyState !== 1) return;
+        if (sent.has(v)) return;
         v.send(msg);
     });
-
 }
 
 // Broadcast to ALL connected viewers (no conversation filter)

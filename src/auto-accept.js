@@ -329,6 +329,11 @@ async function handleAutoAcceptDirect(cascadeId, inst, stepInfo = null) {
         if (result.ok) {
             console.log(`[AutoAccept] +++ ACCEPTED ${cascadeId.substring(0, 8)} via ${inst.workspaceName} (port ${inst.port})`);
             _broadcast({ type: 'auto_accepted', conversationId: cascadeId }, cascadeId);
+            // Web Push for auto-accepted
+            try {
+                const { handleAutoAcceptedPush } = require('./push-service');
+                handleAutoAcceptedPush(cascadeId);
+            } catch {}
         } else {
             console.log(`[AutoAccept] --- FAILED ${cascadeId.substring(0, 8)} via ${inst.workspaceName}: ${result.error || result.data}`);
             // Remove from debounce so next poll cycle can retry

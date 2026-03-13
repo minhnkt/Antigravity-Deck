@@ -1,6 +1,5 @@
 'use client';
 
-import { wsService } from './ws-service';
 import { updateSettings, getSettings } from './cascade-api';
 
 // === Types ===
@@ -30,60 +29,12 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   },
 };
 
-const COMPLETE_STATUSES = [
-  'CASCADE_RUN_STATUS_IDLE',
-  'CASCADE_RUN_STATUS_DONE',
-  'CASCADE_RUN_STATUS_COMPLETED',
-];
-const ACTIVE_STATUSES = [
-  'CASCADE_RUN_STATUS_RUNNING',
-  'CASCADE_RUN_STATUS_WAITING_FOR_USER',
-];
-const ERROR_STATUSES = [
-  'CASCADE_RUN_STATUS_ERROR',
-  'CASCADE_RUN_STATUS_FAILED',
-  'CASCADE_RUN_STATUS_CANCELLED',
-];
-
-const DEBOUNCE_MS = 5000; // 5s debounce per event+conv
-
-// === Notification titles & bodies ===
-
-const EVENT_CONFIG: Record<string, { title: string; body: string; tag: string }> = {
-  'cascade-complete': {
-    title: '✅ Cascade Complete',
-    body: 'Your cascade has finished running.',
-    tag: 'cascade-complete',
-  },
-  'waiting-for-user': {
-    title: '⏳ Action Required',
-    body: 'Cascade is waiting for your approval.',
-    tag: 'waiting-for-user',
-  },
-  'error': {
-    title: '❌ Cascade Error',
-    body: 'Your cascade encountered an error.',
-    tag: 'cascade-error',
-  },
-  'auto-accepted': {
-    title: '⚡ Auto-Accepted',
-    body: 'A change was auto-accepted.',
-    tag: 'auto-accepted',
-  },
-};
-
 // === Service ===
 
 class NotificationService {
   private _initialized = false;
   private _settings: NotificationSettings = DEFAULT_SETTINGS;
   private _swRegistration: ServiceWorkerRegistration | null = null;
-  private unsubscribers: Array<() => void> = [];
-
-  // Status tracker (same pattern as SoundNotificationService)
-  private statuses = new Map<string, string>();
-  private initSeeded = new Set<string>();
-  private lastNotifyTime = new Map<string, number>();
 
   constructor() {
     this._settings = this.loadSettings();
@@ -119,10 +70,15 @@ class NotificationService {
           return;
         }
       }
-      // Permission is granted — enable
+      // Permission is granted — enable and subscribe to push
       this._settings.enabled = true;
+      if (this._swRegistration) {
+        this.subscribeToPush().catch(() => {});
+      }
     } else {
       this._settings.enabled = false;
+      // Unsubscribe from push when user disables notifications
+      this.unsubscribeFromPush().catch(() => {});
     }
     this.saveSettings();
   }
@@ -139,6 +95,10 @@ class NotificationService {
     if (result === 'granted' && !this._settings.enabled) {
       this._settings.enabled = true;
       this.saveSettings();
+      // Also subscribe to push now that we have permission
+      if (this._swRegistration) {
+        this.subscribeToPush().catch(() => {});
+      }
     }
     // Emit settings change to update UI (permission status changed)
     window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
@@ -215,98 +175,109 @@ class NotificationService {
       // Server unavailable, use localStorage fallback
     }
 
-    // Subscribe to WS events (same pattern as SoundNotificationService)
-    if (wsService) {
-      this.unsubscribers.push(
-        wsService.on('cascade_status', (data) => {
-          const convId = data.conversationId as string;
-          const newStatus = data.status as string;
-          if (!convId || !newStatus) return;
-          this.handleCascadeStatus(convId, newStatus);
-        })
-      );
-      this.unsubscribers.push(
-        wsService.on('auto_accepted', (data) => {
-          const convId = data.conversationId as string;
-          if (!convId) return;
-          this.notify('auto-accepted', convId);
-        })
-      );
+    console.log('[Notifications] Initialized — enabled:', this._settings.enabled, 'permission:', this.getPermission());
+
+    // Subscribe to Web Push (background notifications even when tab is closed)
+    if (this._settings.enabled && this.getPermission() === 'granted' && this._swRegistration) {
+      this.subscribeToPush().catch((e) => {
+        console.warn('[Notifications] Push subscription failed:', e);
+      });
     }
   }
 
-  // --- Cascade Status State Machine (mirrors SoundNotificationService) ---
+  // --- Web Push Subscription ---
 
-  private handleCascadeStatus(convId: string, newStatus: string): void {
-    const prev = this.statuses.get(convId);
-    this.statuses.set(convId, newStatus);
+  private async subscribeToPush(): Promise<void> {
+    if (!this._swRegistration) return;
 
-    // Smart init: first event is seed
-    if (this.initSeeded.has(convId)) {
-      this.initSeeded.delete(convId);
-      if (prev === newStatus) return;
-    }
-
-    if (prev === undefined) {
-      this.initSeeded.add(convId);
+    // Check if already subscribed
+    const existing = await this._swRegistration.pushManager.getSubscription();
+    if (existing) {
+      console.log('[Notifications] Already subscribed to push');
       return;
     }
 
-    // Cascade complete
-    if (ACTIVE_STATUSES.includes(prev) && COMPLETE_STATUSES.includes(newStatus)) {
-      this.notify('cascade-complete', convId);
-      return;
-    }
+    // Fetch VAPID public key from backend
+    try {
+      const { API_BASE } = await import('./config');
+      const { authHeaders } = await import('./auth');
+      const res = await fetch(`${API_BASE}/api/push/vapid-public-key`, { headers: authHeaders() });
+      if (!res.ok) {
+        console.warn('[Notifications] Could not fetch VAPID key:', res.status);
+        return;
+      }
+      const { publicKey } = await res.json();
+      if (!publicKey) return;
 
-    // Waiting for user
-    if (newStatus === 'CASCADE_RUN_STATUS_WAITING_FOR_USER' && prev !== 'CASCADE_RUN_STATUS_WAITING_FOR_USER') {
-      this.notify('waiting-for-user', convId);
-      return;
-    }
+      // Subscribe via Push API
+      const subscription = await this._swRegistration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: this.urlBase64ToUint8Array(publicKey).buffer as ArrayBuffer,
+      });
 
-    // Error (includes CANCELLED)
-    if (ERROR_STATUSES.includes(newStatus) && !ERROR_STATUSES.includes(prev)) {
-      this.notify('error', convId);
-      return;
+      // Send subscription to backend
+      await fetch(`${API_BASE}/api/push/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(subscription.toJSON()),
+      });
+
+      console.log('[Notifications] ✅ Push subscription registered');
+    } catch (e) {
+      console.warn('[Notifications] Push subscribe error:', e);
     }
   }
 
-  // --- Notification dispatch ---
+  private async unsubscribeFromPush(): Promise<void> {
+    if (!this._swRegistration) return;
+    try {
+      const existing = await this._swRegistration.pushManager.getSubscription();
+      if (!existing) return;
+      const endpoint = existing.endpoint;
+      await existing.unsubscribe();
+      // Tell backend to remove this subscription
+      try {
+        const { API_BASE } = await import('./config');
+        const { authHeaders } = await import('./auth');
+        await fetch(`${API_BASE}/api/push/unsubscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ endpoint }),
+        });
+      } catch {}
+      console.log('[Notifications] Push subscription removed');
+    } catch (e) {
+      console.warn('[Notifications] Push unsubscribe error:', e);
+    }
+  }
 
-  private notify(eventId: string, convId: string): void {
-    if (!this._settings.enabled) return;
-    if (this.getPermission() !== 'granted') return;
+  private urlBase64ToUint8Array(base64String: string): Uint8Array {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
 
-    // Check per-event toggle
-    const eventKey = this.eventIdToKey(eventId);
-    if (eventKey && !this._settings.events[eventKey]) return;
+  // --- Test (used by Settings UI "Test Notification" button) ---
 
-    // Debounce
-    const key = `${eventId}:${convId}`;
-    const now = Date.now();
-    if (now - (this.lastNotifyTime.get(key) || 0) < DEBOUNCE_MS) return;
-    this.lastNotifyTime.set(key, now);
-
-    // Don't notify if the app is in the foreground and visible
-    if (document.visibilityState === 'visible' && document.hasFocus()) return;
-
-    const config = EVENT_CONFIG[eventId];
-    if (!config) return;
-
-    this.showNotification(config.title, config.body, {
-      tag: `${config.tag}-${convId.substring(0, 8)}`,
-      data: { url: '/', convId },
+  testNotification(): void {
+    if (this.getPermission() !== 'granted') {
+      this.requestPermission().then((p) => {
+        if (p === 'granted') {
+          this.showNotification('🔔 Test Notification', 'Notifications are working!', {
+            tag: 'test',
+          });
+        }
+      });
+      return;
+    }
+    this.showNotification('🔔 Test Notification', 'Notifications are working!', {
+      tag: 'test',
     });
-  }
-
-  private eventIdToKey(eventId: string): keyof NotificationSettings['events'] | null {
-    const map: Record<string, keyof NotificationSettings['events']> = {
-      'cascade-complete': 'cascadeComplete',
-      'waiting-for-user': 'waitingForUser',
-      'error': 'error',
-      'auto-accepted': 'autoAccepted',
-    };
-    return map[eventId] || null;
   }
 
   private showNotification(title: string, body: string, options: { tag?: string; data?: Record<string, unknown> } = {}): void {
@@ -334,32 +305,9 @@ class NotificationService {
     }
   }
 
-  // --- Test ---
-
-  testNotification(): void {
-    if (this.getPermission() !== 'granted') {
-      this.requestPermission().then((p) => {
-        if (p === 'granted') {
-          this.showNotification('🔔 Test Notification', 'Notifications are working!', {
-            tag: 'test',
-          });
-        }
-      });
-      return;
-    }
-    this.showNotification('🔔 Test Notification', 'Notifications are working!', {
-      tag: 'test',
-    });
-  }
-
   // --- Cleanup ---
 
   destroy(): void {
-    this.unsubscribers.forEach((unsub) => unsub());
-    this.unsubscribers = [];
-    this.statuses.clear();
-    this.initSeeded.clear();
-    this.lastNotifyTime.clear();
     this._initialized = false;
   }
 }

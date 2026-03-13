@@ -132,6 +132,12 @@ async function pollNow() {
                     status: info.status,
                 }, cascadeId);
                 handleAutoAccept(cascadeId, info.status);
+                // Web Push: send push notification for status transitions
+                try {
+                    const { handleCascadeStatusPush } = require('./push-service');
+                    handleCascadeStatusPush(cascadeId, prevStatus || '', info.status);
+                } catch {}
+
 
                 // Bridge relay: trigger when cascade transitions from active → done
                 const wasActive = prevStatus === 'CASCADE_RUN_STATUS_RUNNING' ||
@@ -466,6 +472,11 @@ async function startCascadeSSE() {
                                     status: status,
                                 }, convId);
                                 handleAutoAccept(convId, status);
+                                // Web Push: send push notification for status transitions
+                                try {
+                                    const { handleCascadeStatusPush } = require('./push-service');
+                                    handleCascadeStatusPush(convId, prevStatus || '', status);
+                                } catch {}
 
                                 // Bridge relay: trigger when cascade transitions from active → done
                                 const wasActive = prevStatus === 'CASCADE_RUN_STATUS_RUNNING' ||
