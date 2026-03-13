@@ -195,8 +195,14 @@ function setupRoutes(app) {
                             // /T = kill tree (IDE + child LS), /F = force
                             execSync(`taskkill /PID ${ppid} /T /F`, { stdio: 'ignore', timeout: 5000 });
                         } else {
-                            // Kill the IDE app process; LS children will die with it
-                            execSync(`kill ${ppid}`, { stdio: 'ignore', timeout: 5000 });
+                            // macOS: graceful quit via AppleScript first, then force kill
+                            exec('osascript -e \'quit app "Antigravity"\' 2>/dev/null', { timeout: 5000 }, () => {});
+                            // Force kill after short delay if still alive
+                            setTimeout(() => {
+                                try { execSync(`kill -9 ${ppid}`, { stdio: 'ignore', timeout: 3000 }); } catch { }
+                                // Also kill any remaining Antigravity processes
+                                try { execSync('pkill -9 -i "^Antigravity" 2>/dev/null', { stdio: 'ignore', timeout: 3000 }); } catch { }
+                            }, 2000);
                         }
                         console.log(`[*] Killed IDE PID ${ppid}`);
                     } catch (e) {
