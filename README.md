@@ -107,6 +107,20 @@ curl -sL https://raw.githubusercontent.com/tysonnbt/Antigravity-Deck/main/script
 
 > **Prerequisites:** [Node.js 18+](https://nodejs.org/), [Git](https://git-scm.com/), and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). The setup script will check and guide you if anything is missing.
 
+### 🗑️ Uninstall
+
+To remove Antigravity Deck, simply delete the install folder:
+
+**Windows:**
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\AntigravityDeck"
+```
+
+**macOS / Linux:**
+```bash
+rm -rf ~/.antigravity-deck
+```
+
 ### Local Development
 
 ```bash
