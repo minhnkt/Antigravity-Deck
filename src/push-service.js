@@ -15,7 +15,9 @@ function initVapid() {
     const settings = getSettings();
     if (settings.vapidPublicKey && settings.vapidPrivateKey) {
         webpush.setVapidDetails(
-            'mailto:antigravity-deck@localhost',
+            // Must be a valid https: URL or mailto: with real domain.
+            // Apple APNs rejects 'localhost' as the email domain (RFC 8292).
+            'mailto:push@antigravity-deck.app',
             settings.vapidPublicKey,
             settings.vapidPrivateKey
         );
@@ -30,7 +32,7 @@ function initVapid() {
         vapidPrivateKey: vapidKeys.privateKey,
     });
     webpush.setVapidDetails(
-        'mailto:antigravity-deck@localhost',
+        'mailto:push@antigravity-deck.app',
         vapidKeys.publicKey,
         vapidKeys.privateKey
     );
@@ -101,8 +103,14 @@ async function sendPushToAll(payload) {
     const results = await Promise.allSettled(
         subs.map(sub =>
             webpush.sendNotification(sub, message).catch(err => {
-                // 404 or 410 = subscription expired/invalid → remove
-                if (err.statusCode === 404 || err.statusCode === 410) {
+                // Log every failure with details so we can diagnose iOS/APNs issues
+                const endpointShort = sub.endpoint?.split('/').pop()?.substring(0, 20) || '?';
+                const body = err.body ? (typeof err.body === 'string' ? err.body : JSON.stringify(err.body)) : err.message || String(err);
+                console.warn(`[Push] ⚠️  Failed to send to ...${endpointShort}: HTTP ${err.statusCode || '?'} — ${body}`);
+                // 404/410 = expired/unregistered; 401/403 = VAPID key mismatch (e.g. BadJwtToken from Apple APNs)
+                // All of these mean the subscription is permanently invalid — remove it.
+                if (err.statusCode === 404 || err.statusCode === 410 ||
+                    err.statusCode === 401 || err.statusCode === 403) {
                     expiredEndpoints.push(sub.endpoint);
                 }
                 throw err;
@@ -118,8 +126,9 @@ async function sendPushToAll(payload) {
     }
 
     const sent = results.filter(r => r.status === 'fulfilled').length;
-    if (sent > 0) {
-        console.log(`[Push] Sent to ${sent}/${subs.length} subscriber(s): ${payload.title || 'notification'}`);
+    const failed = results.filter(r => r.status === 'rejected').length;
+    if (sent > 0 || failed > 0) {
+        console.log(`[Push] Sent: ${sent}/${subs.length}, Failed: ${failed} — ${payload.title || 'notification'}`);
     }
 }
 

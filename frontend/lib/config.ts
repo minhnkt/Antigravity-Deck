@@ -14,16 +14,27 @@ export async function getWsUrl(): Promise<string> {
     const isBrowser = typeof window !== 'undefined';
     if (!isBrowser) return 'ws://localhost:3500';
 
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const hostname = window.location.hostname;
+
+    // Treat localhost, loopback, and private LAN IPs as "local"
+    // (192.168.x.x, 10.x.x.x, 172.16-31.x.x, 169.254.x.x link-local)
+    const isLocal =
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        /^192\.168\./.test(hostname) ||
+        /^10\./.test(hostname) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+        /^169\.254\./.test(hostname);
 
     if (isLocal) {
-        // Fetch actual backend port at runtime — works regardless of port (3500 or 9807)
+        // Fetch actual backend port at runtime via Next.js proxy — works for
+        // localhost AND any LAN IP the server is reachable on.
         try {
             const res = await fetch('/api/ws-url');
             const { wsPort } = await res.json();
-            _wsUrl = `ws://localhost:${wsPort}`;
+            _wsUrl = `ws://${hostname}:${wsPort}`;
         } catch {
-            _wsUrl = 'ws://localhost:3500'; // fallback
+            _wsUrl = `ws://${hostname}:3500`; // fallback
         }
     } else {
         // Remote tunnel: use NEXT_PUBLIC_BACKEND_URL if available, else derive from window.location
@@ -35,6 +46,7 @@ export async function getWsUrl(): Promise<string> {
 
     return _wsUrl;
 }
+
 
 // Legacy sync export (used as initial value — overridden when getWsUrl() resolves)
 export const WS_URL = '';

@@ -190,17 +190,30 @@ class NotificationService {
   private async subscribeToPush(): Promise<void> {
     if (!this._swRegistration) return;
 
-    // Check if already subscribed
+    const { API_BASE } = await import('./config');
+    const { authHeaders } = await import('./auth');
+
+    // Check if already subscribed in the browser
     const existing = await this._swRegistration.pushManager.getSubscription();
     if (existing) {
-      console.log('[Notifications] Already subscribed to push');
+      // Always re-confirm with the server — it may have lost our subscription
+      // (e.g. server restart, push-subscriptions.json wiped, or first time on PWA).
+      // The server deduplicates by endpoint so this is idempotent.
+      try {
+        await fetch(`${API_BASE}/api/push/subscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(existing.toJSON()),
+        });
+        console.log('[Notifications] Push subscription re-confirmed with server');
+      } catch {
+        console.warn('[Notifications] Could not re-confirm push subscription with server');
+      }
       return;
     }
 
-    // Fetch VAPID public key from backend
+    // No existing subscription — create one
     try {
-      const { API_BASE } = await import('./config');
-      const { authHeaders } = await import('./auth');
       const res = await fetch(`${API_BASE}/api/push/vapid-public-key`, { headers: authHeaders() });
       if (!res.ok) {
         console.warn('[Notifications] Could not fetch VAPID key:', res.status);
@@ -209,7 +222,9 @@ class NotificationService {
       const { publicKey } = await res.json();
       if (!publicKey) return;
 
-      // Subscribe via Push API
+      // Subscribe via Push API.
+      // Pass Uint8Array directly (not .buffer) — .buffer can include extra padding
+      // bytes if the array is a view into a larger underlying ArrayBuffer.
       const subscription = await this._swRegistration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: this.urlBase64ToUint8Array(publicKey).buffer as ArrayBuffer,

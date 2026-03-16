@@ -120,6 +120,14 @@ async function pollNow() {
 
         // Poll each discovered conversation
         for (const [cascadeId, info] of convToPoll) {
+            // Seed status on first sight: if we've never seen this cascade before,
+            // record its current status now so the NEXT change has a valid prevStatus.
+            // Without this, a cascade already RUNNING on first poll would have
+            // prevStatus=undefined → ACTIVE_STATUSES.includes('') = false → push never fires.
+            if (lastCascadeStatusMap[cascadeId] === undefined && info.status) {
+                lastCascadeStatusMap[cascadeId] = info.status;
+            }
+
             // Detect cascade status changes for ALL conversations (not just polled ones)
             // This must happen BEFORE the isRunning filter, otherwise
             // RUNNING→DONE transitions are missed for non-UI-viewed cascades (e.g. bridge)
@@ -463,6 +471,10 @@ async function startCascadeSSE() {
                         const convId = msg.cascadeId || msg.conversationId;
                         if (convId && status) {
                             console.log(`[SSE] Status update: ${convId.substring(0, 8)} → ${status}`);
+                            // Seed on first sight (same logic as poll path)
+                            if (lastCascadeStatusMap[convId] === undefined) {
+                                lastCascadeStatusMap[convId] = status;
+                            }
                             if (status !== lastCascadeStatusMap[convId]) {
                                 const prevStatus = lastCascadeStatusMap[convId];
                                 lastCascadeStatusMap[convId] = status;
