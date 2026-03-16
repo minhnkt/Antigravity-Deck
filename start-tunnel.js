@@ -334,11 +334,13 @@ async function runTunnel() {
             const qrcode = require('qrcode-terminal');
             qrcode.generate(qrUrl, { small: true }, (qr) => {
                 console.log(qr.split('\n').map(l => '    ' + l).join('\n'));
-                console.log(`\n  🔗 ${qrUrl}\n`);
+                console.log(`\n  🔗 ${qrUrl}`);
+                console.log(`  💻 Local: \x1b[36mhttp://localhost:${FE_PORT}/?key=${authKey}\x1b[0m\n`);
             });
         } catch {
             console.log(`  (qrcode-terminal not installed — scan URL manually)`);
-            console.log(`  🔗 ${qrUrl}\n`);
+            console.log(`  🔗 ${qrUrl}`);
+            console.log(`  💻 Local: \x1b[36mhttp://localhost:${FE_PORT}/?key=${authKey}\x1b[0m\n`);
         }
     } else {
         log('*', '⚠️  Frontend tunnel failed, but local access still works');
