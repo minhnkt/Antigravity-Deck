@@ -52,6 +52,34 @@ function createSession(opts = {}) {
         _broadcast('session_destroyed', { sessionId: id });
     });
 
+    // --- Add after the 'destroyed' listener ---
+
+    session.on('status_change', (data) => {
+        _broadcast('session_status_change', {
+            sessionId: id,
+            state: data.state,
+            previousState: data.previousState,
+            isBusy: data.isBusy,
+        });
+    });
+
+    session.on('busy_change', (data) => {
+        _broadcast('session_status_change', {
+            sessionId: id,
+            isBusy: data.isBusy,
+        });
+    });
+
+    session.on('log', (data) => {
+        _broadcast('session_log', {
+            sessionId: id,
+            transport: session.transport,
+            logType: data.type,
+            message: data.message,
+            timestamp: data.ts,
+        });
+    });
+
     _broadcast('session_created', { sessionId: id, ...session.getStatus() });
 
     // Start cleanup timer if not running
