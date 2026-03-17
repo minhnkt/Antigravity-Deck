@@ -72,7 +72,7 @@ function buildSnippets(baseUrl: string, wsUrl: string, authKey: string): Record<
 
     return {
         'curl': `\`\`\`bash
-# 1. Connect — tạo session mới
+# 1. Connect — create a new session
 curl -X POST ${baseUrl}/api/agent/connect \\
   -H "Content-Type: application/json" \\${authHeader}
   -d '{"workspace":"MyProject"}'
@@ -143,7 +143,7 @@ wscat -c "${wsUrl}${authWsParam}"
 \`\`\``,
 
         'Claude Code': `\`\`\`markdown
-# Trong Claude Code, dùng MCP hoặc curl tool:
+# In Claude Code, use MCP or curl tool:
 
 Antigravity Deck Agent API:
 - Base URL: ${baseUrl}
@@ -172,9 +172,9 @@ function buildApiRef(baseUrl: string, wsUrl: string): string {
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| \`POST\` | \`/api/agent/connect\` | Tạo session mới. Body: \`{"workspace","cascadeId?","stepSoftLimit?"}\` |
-| \`POST\` | \`/api/agent/:id/send\` | Gửi message (blocking). Body: \`{"message","action?","authorName?"}\` |
-| \`GET\` | \`/api/agent/:id/status\` | Trạng thái session |
+| \`POST\` | \`/api/agent/connect\` | Create new session. Body: \`{"workspace","cascadeId?","stepSoftLimit?"}\` |
+| \`POST\` | \`/api/agent/:id/send\` | Send message (blocking). Body: \`{"message","action?","authorName?"}\` |
+| \`GET\` | \`/api/agent/:id/status\` | Get session status |
 | \`POST\` | \`/api/agent/:id/accept\` | Accept code changes |
 | \`POST\` | \`/api/agent/:id/reject\` | Reject code changes |
 | \`POST\` | \`/api/agent/:id/switch-workspace\` | Switch workspace |
@@ -191,13 +191,13 @@ function buildApiRef(baseUrl: string, wsUrl: string): string {
 
 | Type | Fields | Description |
 |------|--------|-------------|
-| \`connect\` | \`workspace, cascadeId?, transport?\` | Mở session |
-| \`send\` | \`message, action?, authorName?\` | Gửi message |
+| \`connect\` | \`workspace, cascadeId?, transport?\` | Open session |
+| \`send\` | \`message, action?, authorName?\` | Send message |
 | \`accept\` | — | Accept code changes |
 | \`reject\` | — | Reject code changes |
-| \`switch_workspace\` | \`workspace\` | Chuyển workspace / tạo cascade mới |
+| \`switch_workspace\` | \`workspace\` | Switch workspace / create new cascade |
 | \`status\` | — | Query session status |
-| \`disconnect\` | — | Đóng session |
+| \`disconnect\` | — | Close session |
 
 **Server → Client:**
 
