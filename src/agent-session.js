@@ -287,6 +287,7 @@ class AgentSession extends EventEmitter {
                 if (isTerminal) {
                     this._addLog('system', `Cascade ${this._shortId()} is ${status || 'UNKNOWN'} — creating new`);
                     const oldId = this._cascadeId;
+                    const oldCount = this._stepCount;
                     this._cascadeId = await startCascade(this._lsInst);
                     this._stepCount = 0;
                     this._lastRelayedStepIndex = -1;
@@ -295,7 +296,7 @@ class AgentSession extends EventEmitter {
                     this.emit('cascade_transition', {
                         oldId,
                         newId: this._cascadeId,
-                        oldStepCount: this._stepCount,
+                        oldStepCount: oldCount,
                         oldShort: this._shortId(oldId),
                         newShort: this._shortId(),
                         stepCount: 0,

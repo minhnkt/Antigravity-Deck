@@ -4,6 +4,7 @@
 
 const crypto = require('crypto');
 const { AgentSession } = require('./agent-session');
+const { resolveLsInst } = require('./ls-utils');
 
 const sessions = new Map(); // sessionId → AgentSession
 let _config = {
@@ -39,7 +40,7 @@ function createSession(opts = {}) {
         workspace: opts.workspace,
         cascadeId: opts.cascadeId,
         stepSoftLimit: opts.stepSoftLimit || _config.defaultStepSoftLimit,
-        lsInst: opts.lsInst || _resolveLsInst(opts.workspace),
+        lsInst: opts.lsInst || resolveLsInst(opts.workspace),
         transport: opts.transport || 'unknown',
         persist: () => {}, // sessions are in-memory; override if needed
     });
@@ -77,8 +78,7 @@ function getSession(sessionId) {
 function destroySession(sessionId) {
     const session = sessions.get(sessionId);
     if (session) {
-        session.destroy();
-        sessions.delete(sessionId);
+        session.destroy(); // 'destroyed' event listener handles sessions.delete + broadcast
     }
 }
 
@@ -116,27 +116,12 @@ function shutdownAll() {
 
 // ── Internal ─────────────────────────────────────────────────────────────────
 
-function _resolveLsInst(workspace) {
-    if (!workspace) return null;
-    try {
-        const { lsInstances } = require('./config');
-        const match = lsInstances.find(
-            i => i.workspaceName.toLowerCase() === workspace.toLowerCase()
-        );
-        if (match) {
-            return { port: match.port, csrfToken: match.csrfToken, useTls: match.useTls };
-        }
-    } catch { /* config not ready */ }
-    return null;
-}
-
 function _cleanupIdleSessions() {
     const now = Date.now();
     for (const [id, session] of sessions) {
         if (!session.isBusy && (now - session.lastActivity) > _config.sessionTimeoutMs) {
             console.log(`[SessionManager] Idle timeout — destroying session ${id.substring(0, 8)}`);
-            session.destroy();
-            sessions.delete(id);
+            session.destroy(); // 'destroyed' event listener handles sessions.delete + broadcast
         }
     }
     // Stop timer if no sessions
@@ -158,8 +143,7 @@ function _evictIdlest() {
     if (oldest) {
         console.log(`[SessionManager] Evicting idle session ${oldest.substring(0, 8)}`);
         const session = sessions.get(oldest);
-        session.destroy();
-        sessions.delete(oldest);
+        session.destroy(); // 'destroyed' event listener handles sessions.delete + broadcast
         return true;
     }
     return false;

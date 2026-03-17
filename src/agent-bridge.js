@@ -1,6 +1,6 @@
-// === Agent Bridge ===
-// Relay between Antigravity (Executor) and Pi/OpenClaw via Discord.
-// Now uses AgentSession for orchestration — transport-agnostic cascade lifecycle.
+// === Agent Bridge (Discord Transport) ===
+// Discord-specific transport layer for agent ↔ cascade interaction.
+// Uses AgentSession for orchestration — transport-agnostic cascade lifecycle.
 //
 // Discord Commands (no @mention needed):
 //   /help           — show available commands

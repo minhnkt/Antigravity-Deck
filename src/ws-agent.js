@@ -8,6 +8,7 @@
 
 const crypto = require('crypto');
 const sessionManager = require('./agent-session-manager');
+const { resolveLsInst } = require('./ls-utils');
 
 /**
  * Set up the agent WebSocket server.
@@ -111,7 +112,7 @@ function setupAgentWebSocket(agentWss) {
                             break;
                         }
 
-                        const lsInst = _resolveLsInst(msg.workspace);
+                        const lsInst = resolveLsInst(msg.workspace);
                         await session.switchWorkspace(msg.workspace, lsInst);
                         _send(ws, {
                             type: 'workspace_switched',
@@ -203,20 +204,6 @@ function _send(ws, data) {
     if (ws.readyState === 1) {
         ws.send(JSON.stringify(data));
     }
-}
-
-function _resolveLsInst(workspace) {
-    if (!workspace) return null;
-    try {
-        const { lsInstances } = require('./config');
-        const match = lsInstances.find(
-            i => i.workspaceName.toLowerCase() === workspace.toLowerCase()
-        );
-        if (match) {
-            return { port: match.port, csrfToken: match.csrfToken, useTls: match.useTls };
-        }
-    } catch { /* not ready */ }
-    return null;
 }
 
 module.exports = { setupAgentWebSocket };

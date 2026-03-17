@@ -4,6 +4,7 @@
 
 const { z } = require('zod');
 const sessionManager = require('../agent-session-manager');
+const { resolveLsInst } = require('../ls-utils');
 
 const ConnectSchema = z.object({
     workspace: z.string().max(200).optional(),
@@ -145,7 +146,7 @@ module.exports = function setupAgentApiRoutes(app) {
 
         try {
             const body = SwitchWorkspaceSchema.parse(req.body || {});
-            const lsInst = _resolveLsInst(body.workspace);
+            const lsInst = resolveLsInst(body.workspace);
             await session.switchWorkspace(body.workspace, lsInst);
             res.json({
                 workspace: session.workspace,
@@ -194,19 +195,3 @@ module.exports = function setupAgentApiRoutes(app) {
         res.json({ sessions: sessionManager.listSessions() });
     });
 };
-
-// ── Internal ─────────────────────────────────────────────────────────────────
-
-function _resolveLsInst(workspace) {
-    if (!workspace) return null;
-    try {
-        const { lsInstances } = require('../config');
-        const match = lsInstances.find(
-            i => i.workspaceName.toLowerCase() === workspace.toLowerCase()
-        );
-        if (match) {
-            return { port: match.port, csrfToken: match.csrfToken, useTls: match.useTls };
-        }
-    } catch { /* not ready */ }
-    return null;
-}
