@@ -29,25 +29,32 @@ Replace `AgentBridgeView` with **Agent Hub** — a tabbed view that unifies agen
 
 ```
 AgentHubView (replaces AgentBridgeView)
+├── useAgentWs hook (lives HERE — not in ChatPanel — survives tab switches)
 ├── Tabs (shadcn Tabs)
 │   ├── "Sessions"  → AgentSessionsPanel
 │   │   ├── SessionCard[]
 │   │   └── EmptyState
-│   ├── "Chat"      → AgentChatPanel
+│   ├── "Chat"      → AgentChatPanel (receives useAgentWs state via props)
 │   │   ├── WorkspaceSelector
 │   │   ├── ConnectButton
 │   │   ├── MessageList
 │   │   ├── ChatInput
 │   │   └── SessionControls
 │   ├── "Config"    → AgentConfigPanel
-│   │   ├── Enable/Disable toggle
-│   │   ├── Max sessions input
-│   │   ├── Timeout input
-│   │   └── Step limit input
+│   │   ├── Agent API Settings (collapsible)
+│   │   │   ├── Enable/Disable toggle
+│   │   │   ├── Max sessions input
+│   │   │   ├── Timeout input
+│   │   │   └── Step limit input
+│   │   └── Discord Bridge Settings (collapsible)
+│   │       ├── Bot Token, Channel ID, Guild ID
+│   │       ├── Step Soft Limit, Allowed Bot IDs
+│   │       ├── Auto-start toggle
+│   │       └── Start/Stop Bridge buttons
 │   └── "Logs"      → AgentLogsPanel
 │       ├── Transport filter
 │       ├── Level filter
-│       └── LogEntries (auto-scroll)
+│       └── LogEntries (auto-scroll, React.memo)
 ```
 
 ### Data Flow
@@ -55,14 +62,23 @@ AgentHubView (replaces AgentBridgeView)
 ```
 Backend                              Frontend
 ───────                              ────────
-SessionManager ──_broadcast──→ UI WS (/ws) ──→ useWebSocket hook
+SessionManager ──_broadcast──→ UI WS (/ws) ──→ wsService singleton
   type: 'agent_sessions'                       ↓
   event: 'session_created'               AgentHubView
-       | 'session_destroyed'             ├── Sessions panel (reads session list)
-       | 'session_log'                   ├── Logs panel (reads log events)
-                                         └── Chat panel ──→ Agent WS (/ws/agent)
-                                                            ↕ (connect/send/response)
-                                                          AgentSession
+       | 'session_destroyed'             ├── Sessions panel
+       | 'session_status_change'         │   ├── HTTP GET /api/agent/sessions (on mount)
+       | 'session_log'                   │   └── WS events (incremental updates)
+                                         ├── Config panel
+                                         │   ├── HTTP GET /api/agent-api/settings (on mount)
+                                         │   ├── HTTP PUT /api/agent-api/settings (save)
+                                         │   ├── HTTP GET/POST /api/agent-bridge/settings
+                                         │   └── HTTP POST /api/agent-bridge/start|stop
+                                         ├── Logs panel (WS session_log events)
+                                         └── Chat panel
+                                             └── useAgentWs hook (lifted to HubView)
+                                                 └── Agent WS (/ws/agent)
+                                                     ↕ (connect/send/response)
+                                                   AgentSession
 ```
 
 **Existing broadcast format** (already implemented in `agent-session-manager.js`):
@@ -72,20 +88,23 @@ SessionManager ──_broadcast──→ UI WS (/ws) ──→ useWebSocket hook
 ```
 New events to add: `session_status_change`, `session_log` — same `type: 'agent_sessions'` envelope.
 
-**Two WebSocket connections when chat is active:**
+**Two WebSocket connections when Agent Hub is mounted:**
 1. **UI WS** (`/ws`) — existing connection, already broadcasts `agent_sessions` events; extend with log events
-2. **Agent WS** (`/ws/agent`) — opened only when Chat tab is active; UI acts as a real agent client
+2. **Agent WS** (`/ws/agent`) — opened when user clicks Connect in Chat panel; stays open as long as Agent Hub is mounted (NOT tied to Chat tab visibility). Only closes on explicit Disconnect or when user navigates away from Agent Hub entirely. This prevents session destruction on tab switches within Agent Hub.
+
+**Agent WS URL construction:** Derive from `getWsUrl()` by replacing `/ws` path with `/ws/agent`. Add `getAgentWsUrl()` helper to `lib/config.ts`.
 
 ### Files
 
 **New (frontend):**
-- `components/agent-hub-view.tsx` — main container with Tabs
-- `components/agent-hub/sessions-panel.tsx` — active sessions list
-- `components/agent-hub/chat-panel.tsx` — built-in agent chat
-- `components/agent-hub/config-panel.tsx` — API settings
-- `components/agent-hub/logs-panel.tsx` — unified log stream
-- `hooks/use-agent-ws.ts` — custom hook for Agent WS connection
+- `components/agent-hub-view.tsx` — main container with Tabs + useAgentWs lifecycle
+- `components/agent-hub/sessions-panel.tsx` — active sessions list (HTTP init + WS incremental)
+- `components/agent-hub/chat-panel.tsx` — built-in agent chat (receives hook state via props)
+- `components/agent-hub/config-panel.tsx` — Agent API settings + Discord Bridge settings (collapsible sections)
+- `components/agent-hub/logs-panel.tsx` — unified log stream (React.memo entries)
+- `hooks/use-agent-ws.ts` — custom hook for Agent WS connection (explicit state machine)
 - `lib/agent-api.ts` — TypeScript types + HTTP helpers for agent API
+- `lib/agent-utils.ts` — shared constants (STATE_CONFIG, LOG_COLORS, LOG_ICONS, timestamp formatter) extracted from agent-bridge-view.tsx
 
 **Modified (frontend):**
 - `app/page.tsx` — replace `showBridge`/`AgentBridgeView` with `showAgentHub`/`AgentHubView`
@@ -120,11 +139,13 @@ Each card displays:
 - **Last activity** — relative timestamp
 - **Destroy action** — trash icon → confirmation dialog ("Destroy session {id}? This will terminate the agent connection.") → calls `DELETE /api/agent/:sessionId`
 
-### Real-time Updates
+### Data Loading
 
-- Backend broadcasts `{ type: 'agent_sessions', event: 'session_created'|'session_destroyed'|'session_status_change' }` via UI WS
+- **On mount:** HTTP fetch `GET /api/agent/sessions` to populate initial session list (handles case where sessions already exist before Agent Hub opens)
+- **Incremental:** Backend broadcasts `{ type: 'agent_sessions', event: 'session_created'|'session_destroyed'|'session_status_change' }` via UI WS
 - Frontend listens for `type: 'agent_sessions'` and dispatches by `event` field to update the session list
-- Fallback: HTTP poll `GET /api/agent/sessions` on WS reconnect
+- **On HTTP fetch error:** Show error state with retry button
+- **Fallback:** Re-fetch `GET /api/agent/sessions` on WS reconnect
 
 ### Empty State
 
@@ -170,12 +191,15 @@ Below the input area:
 ### Hook: `useAgentWs`
 
 ```typescript
+// Explicit state machine — avoids ambiguous boolean combinations
+type AgentWsState = 'disconnected' | 'connecting' | 'connected' | 'busy' | 'reconnecting' | 'error';
+
 interface UseAgentWs {
-  connected: boolean;
+  state: AgentWsState;
   sessionId: string | null;
   cascadeId: string | null;
+  workspace: string | null;
   messages: AgentMessage[];
-  isBusy: boolean;
   error: string | null;
   connect: (workspace: string) => Promise<void>;
   send: (text: string) => Promise<void>;
@@ -184,6 +208,11 @@ interface UseAgentWs {
   newCascade: () => void;   // sends switch_workspace with current workspace
   disconnect: () => void;
 }
+
+// Derived booleans for convenience (computed from state):
+// connected = state === 'connected' || state === 'busy'
+// isBusy = state === 'busy'
+// isConnecting = state === 'connecting' || state === 'reconnecting'
 
 interface AgentMessage {
   id: string;
@@ -219,7 +248,9 @@ The hook maps this to an `AgentMessage` with `role: 'agent'`, `content: text`, a
 
 ## Config Panel
 
-Matches the existing `SettingsView` visual style.
+Two collapsible sections matching the existing `SettingsView` visual style.
+
+### Section 1: Agent API Settings
 
 | Field | UI Element | Default | Validation |
 |-------|-----------|---------|------------|
@@ -233,6 +264,24 @@ Matches the existing `SettingsView` visual style.
 - Toast notification on save success/failure
 - Changes take effect immediately (session manager reconfigured on save)
 - Settings are persisted to `agent-api.settings.json` on disk (existing `config.js` mechanism) and survive server restarts
+
+### Section 2: Discord Bridge Settings
+
+Ported from existing `agent-bridge-view.tsx` settings panel (lines 279-383):
+
+| Field | UI Element | Validation |
+|-------|-----------|------------|
+| Discord Bot Token | Password input (show/hide toggle) | Required for start |
+| Channel ID | Text input (mono font) | Required for start |
+| Guild ID | Text input (mono font) | Optional |
+| Step Soft Limit | Number input | min: 0, max: 10000 |
+| Allowed Bot IDs | Comma-separated text input | Optional |
+| Auto-start on server boot | Switch toggle | — |
+
+- Loads from `GET /api/agent-bridge/settings`, saves via `POST /api/agent-bridge/settings`
+- Start/Stop Bridge buttons (same as current AgentBridgeView header buttons)
+- Bridge status indicator (IDLE/ACTIVE/TRANSITIONING) with colored dot
+- Listens for `bridge_status` WS events for real-time status updates
 
 ### Settings API Schema
 
@@ -343,7 +392,25 @@ Currently duplicated across `ws-agent.js`, `agent-api.js`, and `agent-session-ma
 
 ## Testing Strategy
 
-- **Unit:** Hook `useAgentWs` — mock WebSocket, verify state transitions
-- **Integration:** Agent Hub tabs render correctly with mock data
-- **E2E:** Connect from Chat tab → send message → verify response appears (requires running Antigravity IDE)
-- **Visual:** Verify dark theme consistency, responsive behavior on mobile
+### Unit Tests: `useAgentWs` hook (~10 test cases)
+Mock WebSocket, verify all state transitions:
+- `disconnected → connecting → connected` (happy path)
+- `connected → busy → connected` (send + response)
+- `connected → reconnecting → connected` (WS close + auto-retry)
+- `reconnecting → error` (3 retries exhausted)
+- `send() when busy` → reject
+- `disconnect() while busy` → cleanup
+- `unmount during active connection` → WS close + cleanup
+- `connect() with WS constructor error` → error state
+- `cascade_transition event` → update cascadeId + system message
+- `step_limit_warning event` → system message
+
+### Component Tests: panels (~8 test cases)
+- Sessions panel: render empty state, render with mock sessions, session_created adds card, session_destroyed removes card
+- Chat panel: render disconnected state, render connected state, message rendering (user/agent/system)
+- Config panel: render with loaded settings, save triggers PUT
+- Logs panel: render log entries, filter by transport
+
+### E2E (manual, deferred)
+- Connect from Chat tab → send message → verify response (requires running Antigravity IDE)
+- Dark theme consistency
