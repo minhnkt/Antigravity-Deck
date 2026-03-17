@@ -2,6 +2,7 @@
 // Manages task decomposition via a planner cascade and parallel sub-agent execution.
 // Uses AgentSession for planner (internal, not pooled) and sub-agents (pooled via SessionManager).
 
+const crypto = require('crypto');
 const EventEmitter = require('events');
 const { AgentSession } = require('./agent-session');
 const sessionManager = require('./agent-session-manager');
@@ -20,14 +21,14 @@ const STATES = {
     CANCELLED: 'CANCELLED',
 };
 
-const DEFAULT_PLANNER_PROMPT = `You are a task orchestrator. Analyze the given task and decide how to handle it.
+const DEFAULT_PLANNER_PROMPT = `You are a task orchestrator in a conversation with the user. You will receive conversation history and the latest user message.
 
-If the task is simple enough for a single cascade to handle directly, respond with:
+For questions, explanations, or simple tasks that a single cascade can handle, respond with:
 \`\`\`json
-{"type":"direct","reason":"...","response":"..."}
+{"type":"direct","reason":"...","response":"your natural language answer"}
 \`\`\`
 
-If the task needs decomposition into subtasks, first explore the project structure, then respond with:
+For complex tasks needing decomposition into subtasks, first explore the project structure, then respond with:
 \`\`\`json
 {
   "type": "orchestrated",
@@ -42,11 +43,10 @@ If the task needs decomposition into subtasks, first explore the project structu
 \`\`\`
 
 Rules:
-- Minimize file overlap between subtasks. If two subtasks must touch the same file, put them in different phases.
+- Minimize file overlap between subtasks in the same phase.
 - Each subtask should be completable in a single cascade turn.
 - Include affectedFiles for every subtask.
-- Maximum 10 subtasks.
-- Respond ONLY with the JSON block, no other text.`;
+- Maximum 10 subtasks.`;
 
 const DEFAULT_SUB_AGENT_PROMPT = `You are a focused sub-agent handling one part of a larger task.
 
@@ -327,6 +327,164 @@ class OrchestratorSession extends EventEmitter {
                 role: 'planner',
             });
         }
+    }
+
+    // ── Chat helpers ─────────────────────────────────────────────
+
+    _resetIdleTimer() {
+        clearTimeout(this._idleTimer);
+        this._idleTimer = setTimeout(() => this.destroy(), 30 * 60 * 1000); // 30 min
+    }
+
+    _buildHistoryContext() {
+        const msgs = this.chatHistory.filter(m => m.role === 'user' || m.role === 'assistant');
+        const recent = msgs.slice(-20);
+        const lines = [];
+        let totalLen = 0;
+        // Iterate in reverse to keep newest messages when truncating
+        for (let i = recent.length - 1; i >= 0; i--) {
+            const line = `[${recent[i].role}]: ${recent[i].content}\n`;
+            if (totalLen + line.length > 4000) break;
+            lines.unshift(line);
+            totalLen += line.length;
+        }
+        return lines.join('') || '(no conversation history)';
+    }
+
+    _buildExecutionSummary() {
+        if (!this._subtasks) return '(no subtasks)';
+        const lines = [];
+        for (const [taskId, st] of this._subtasks) {
+            const result = st.result ? st.result.substring(0, 200) : '';
+            lines.push(`- ${taskId}: ${st.state}${result ? ' — ' + result : ''}`);
+        }
+        return lines.join('\n');
+    }
+
+    async _classifyAndRespond(message) {
+        if (!this._plannerInitialized) {
+            await this._plannerSession.sendMessage(this._plannerPrompt);
+            this._plannerInitialized = true;
+        }
+
+        const historyContext = this._buildHistoryContext();
+        let prompt = `## Conversation History\n${historyContext}\n\n## Latest Message\n${message}`;
+
+        if (this.state === 'AWAITING_APPROVAL') {
+            prompt += '\n\nIMPORTANT: A plan is currently awaiting user approval. '
+                    + 'Answer the user\'s question about the plan. Do NOT create a new plan. '
+                    + 'Respond with {"type":"direct",...} only.';
+        }
+
+        const result = await this._plannerSession.sendMessage(prompt);
+        const parsed = this._parseJson(result.text);
+
+        if (parsed.type === 'direct') {
+            const response = parsed.response || parsed.reason || result.text;
+            this.chatHistory.push({ role: 'assistant', content: response, timestamp: Date.now(), messageType: 'text' });
+            this.emit('chat_response', { content: response, messageType: 'text' });
+        } else if (parsed.type === 'orchestrated') {
+            this._activeOrchestration = true;
+            this._orchRunId = crypto.randomUUID();
+            this._plan = parsed;
+            this._setState('AWAITING_APPROVAL');
+            this.emit('orch_plan', { orchestrationId: this._orchRunId, plan: parsed });
+        } else {
+            const response = result.text || 'Unable to process request';
+            this.chatHistory.push({ role: 'assistant', content: response, timestamp: Date.now(), messageType: 'text' });
+            this.emit('chat_response', { content: response, messageType: 'text' });
+        }
+    }
+
+    async _handleIntervention(message) {
+        const statusSummary = this._buildExecutionSummary();
+        const interventionPrompt = `The user sent a message during task execution.
+
+Current state:
+${statusSummary}
+
+User message: ${message}
+
+Respond with JSON:
+{"type":"intervention","action":"status_report|cancel_subtask|cancel_all|chat_response","taskId":"(if cancel_subtask)","response":"..."}`;
+
+        const result = await this._plannerSession.sendMessage(interventionPrompt);
+        const parsed = this._parseJson(result.text);
+
+        switch (parsed.action) {
+            case 'status_report':
+                this.emit('chat_response', { content: parsed.response, messageType: 'status' });
+                break;
+            case 'cancel_subtask':
+                await this._cancelSubtask(parsed.taskId);
+                this.emit('chat_response', { content: parsed.response, messageType: 'intervention' });
+                break;
+            case 'cancel_all':
+                await this.cancel();
+                this.emit('chat_response', { content: parsed.response, messageType: 'intervention' });
+                break;
+            default:
+                this.emit('chat_response', { content: parsed.response || result.text, messageType: 'text' });
+        }
+
+        this.chatHistory.push({ role: 'assistant', content: parsed.response || result.text, timestamp: Date.now() });
+    }
+
+    async chat(message, { intent, replyTo } = {}) {
+        if (!message || message.trim().length === 0) return;
+        if (message.length > 10000) throw new Error('Message too long');
+
+        this._ensurePlanner();
+        this._resetIdleTimer();
+
+        this.chatHistory.push({ role: 'user', content: message, timestamp: Date.now() });
+
+        if (this._plannerSession?.isBusy) {
+            if (this._chatQueue.length >= 10) {
+                this.emit('chat_response', {
+                    content: 'Too many queued messages. Please wait for processing to complete.',
+                    messageType: 'error'
+                });
+                return;
+            }
+            this._chatQueue.push({ message, intent, replyTo });
+            this.emit('chat_response', {
+                content: 'Message received. Will respond when current processing completes.',
+                messageType: 'queued'
+            });
+            return;
+        }
+
+        try {
+            const clarificationTarget = replyTo && this._subtasks?.get(replyTo);
+            if (clarificationTarget && clarificationTarget.state === 'clarification') {
+                await this.answerClarification(replyTo, message);
+            } else if (this.state === 'AWAITING_APPROVAL' && intent === 'approve') {
+                await this.execute();
+            } else if (this.state === 'AWAITING_APPROVAL' && intent === 'revise') {
+                await this.revisePlan(message);
+            } else if (this._activeOrchestration && intent === 'cancel') {
+                await this.cancel();
+                this.emit('chat_response', { content: 'Orchestration cancelled.', messageType: 'intervention' });
+            } else if (this._activeOrchestration && this.state === 'EXECUTING') {
+                await this._handleIntervention(message);
+            } else {
+                await this._classifyAndRespond(message);
+            }
+        } catch (err) {
+            this.emit('chat_response', {
+                content: `Error: ${err.message}`,
+                messageType: 'error'
+            });
+            this.chatHistory.push({
+                role: 'assistant',
+                content: `Error: ${err.message}`,
+                timestamp: Date.now(),
+                messageType: 'error'
+            });
+        }
+
+        await this._drainChatQueue();
     }
 
     // ── Main entry point ─────────────────────────────────────────
