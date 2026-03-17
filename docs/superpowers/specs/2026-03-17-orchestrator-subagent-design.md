@@ -261,14 +261,18 @@ Sub-agent response truncated to `contextMaxChars: 5000` before sending to planne
   "plannerStepLimit": 1000,
   "historySize": 10,
   "allowMultiTurn": false,
-  "maxMessagesPerSubtask": 5
-
-  // allowMultiTurn: when false (default), each subtask is single-turn: one sendMessage() call.
-  //   Planner must decompose tasks small enough for 1-turn completion.
-  // When true: sub-agent can receive follow-up "Continue" messages up to maxMessagesPerSubtask times.
-  //   Useful for complex subtasks that need iterative refinement.
+  "maxMessagesPerSubtask": 5,
+  "retryDelayMs": 2000,
+  "maxClarificationRounds": 2,
+  "contextMaxChars": 5000
 }
 ```
+
+**Config key notes:**
+- `allowMultiTurn`: when false (default), each subtask is single-turn (one `sendMessage()` call). Planner must decompose tasks small enough for 1-turn completion. When true, sub-agent can receive follow-up "Continue" messages up to `maxMessagesPerSubtask` times.
+- `retryDelayMs`: delay before retrying a failed subtask
+- `maxClarificationRounds`: max times a sub-agent can ask for clarification before mandatory escalation to user
+- `contextMaxChars`: truncation limit for sub-agent response text before sending to planner for review
 
 ### Planner Prompt
 
@@ -539,6 +543,8 @@ New "Orchestrator" tab added to the existing Agent Hub tabbed interface.
 | REVIEWING | "AI reviewing results..." + subtask grid in final states |
 | COMPLETED | Summary card (accepted/rejected counts, time), final subtask grid, "New Task" button |
 | FAILED | Error message + partial results, retry button |
+| RECOVERING | Same as EXECUTING but affected subtask card shows "Retrying..." state |
+| CANCELLING | Spinner + "Cancelling..." + dimmed subtask grid |
 | CANCELLED | Cancellation notice + partial results, "New Task" button |
 
 ### AWAITING_APPROVAL Layout
@@ -610,6 +616,7 @@ interface UseOrchestratorReturn {
 
   start(task: string, workspace: string, config?: Partial<OrchestratorConfig>): void;
   execute(configOverrides?: object): void;
+  revisePlan(feedback: string): void;
   cancel(): void;
   answerClarification(taskId: string, answer: string): void;
 }
@@ -711,6 +718,25 @@ interface OrchestratorConfig {
   historySize: number;
   allowMultiTurn: boolean;
   maxMessagesPerSubtask: number;
+  retryDelayMs: number;
+  maxClarificationRounds: number;
+  contextMaxChars: number;
+}
+
+interface OrchestratorEvent {
+  type: string;          // e.g. 'subtask_started', 'phase_complete', 'clarification'
+  orchestrationId: string;
+  taskId?: string;       // present for subtask-scoped events
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
+interface OrchestratorLog {
+  type: 'system' | 'from_agent' | 'to_agent' | 'error' | 'warning';
+  orchestrationId: string;
+  taskId?: string;
+  message: string;
+  timestamp: number;
 }
 ```
 
