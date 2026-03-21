@@ -4,6 +4,18 @@ Full-featured workspace dashboard for [Antigravity](https://codeium.com/antigrav
 
 ---
 
+## 📸 Screenshots
+
+| Dashboard | Workspace Conversations |
+|:-:|:-:|
+| ![Dashboard](docs/images/dashboard-desktop.png) | ![Workspace](docs/images/workspace-conversations.png) |
+
+| Conversation View | Mobile |
+|:-:|:-:|
+| ![Conversation](docs/images/conversation-desktop.png) | ![Mobile](docs/images/conversation-mobile.png) |
+
+---
+
 ## ✨ Feature Highlights
 
 ### 💬 Chat & Conversations
@@ -56,15 +68,27 @@ Built-in Git integration with visual diff viewer and file explorer.
 - **Git operations** — Stage, commit, push, pull — all from the UI
 - **Branch display** — Current branch shown in header
 
-### 🤖 Agent Bridge
-Connect external AI agents (e.g., Pi, OpenClaw) to Antigravity via Discord.
+### 🤖 Agent Hub
+Connect external AI agents to Antigravity — via Discord, WebSocket, or HTTP API.
 
+- **Universal Agent API** — WebSocket + HTTP endpoints for any external AI agent to connect and drive cascades
+- **Agent sessions** — Full lifecycle management with concurrent session support
+- **Dashboard UI** — Sessions, Chat, Config, and Logs panels in the frontend
 - **Discord relay** — Real WebSocket via discord.js with slash commands and @mention routing
-- **Cascade relay** — Stateless module that polls cascade completion and extracts full responses
+- **Cascade relay** — Polls cascade completion and extracts full responses
 - **Commands** — `/help`, `/listws`, `/setws`, `/start`, `/send`, `/status`, `/accept`, `/reject`, `/abort`, `/logs`
 - **Auto cascade transition** — Automatic conversation switching when step limits are reached
 - **State persistence** — Bridge state saved to `settings.json` across restarts
-- **Live logs** — Bridge activity log viewable in the UI
+- **Live logs** — Agent activity log viewable in the UI
+
+### 🧩 Orchestrator
+Sub-agent system that breaks complex tasks into subtasks and runs them across workspaces.
+
+- **Chat interface** — Conversational UI to describe tasks and review progress
+- **Task orchestration** — Automatic task classification, planning, and parallel execution
+- **Progress tracking** — Sticky progress bar with real-time subtask status
+- **Intervention support** — Accept, reject, or modify subtask results mid-execution
+- **Multi-workspace** — Route subtasks to different workspaces based on context
 
 ### ⚡ Cascade Control
 - **Cascade status** — Running, idle, or waiting for user input
@@ -72,6 +96,12 @@ Connect external AI agents (e.g., Pi, OpenClaw) to Antigravity via Discord.
 - **Auto-accept** — Server-side mode that instantly approves all pending changes
 - **Cancel cascades** — Stop active cascade invocations
 - **Token usage** — View generator metadata and token consumption
+
+### 📱 Mobile & Connectivity
+- **Seamless mobile resume** — Cached UI state so reopening the browser shows data instantly, no loading flash
+- **Smart reconnect** — WebSocket auto-reconnects in background with cached URL for faster recovery
+- **Rich push notifications** — Conversation title and last step content in browser notifications
+- **Service worker** — Offline-capable app shell with background sync
 
 ### 🔒 Security & Remote Access
 - **API key authentication** — `AUTH_KEY` env var + `AuthGate` login form
@@ -157,14 +187,18 @@ AUTH_KEY=your-secret-key npm run dev
 │  (auto-detected) │   Connect Protocol     │   :3500 API   │
 │                  │   HTTPS / HTTP         │               │
 └──────────────────┘                         └──────┬────────┘
-                                                    │ WebSocket
-       ┌──────────────┐                      ┌──────┴────────┐
-       │  Discord Bot  │ ◄─── Agent Bridge ──│   Next.js     │
-       │  (optional)   │                     │   :3000 UI    │
-       └──────────────┘                      └───────────────┘
+                                                    │ WebSocket + HTTP
+  ┌──────────────┐                            ┌─────┴─────────┐
+  │  Discord Bot │ ◄── Agent Hub ────────────│   Next.js     │
+  │  (optional)  │                           │   :3000 UI    │
+  └──────────────┘                            └─────┬─────────┘
+  ┌──────────────┐                                  │
+  │ External AI  │ ◄── Agent API (WS/HTTP) ─────────┘
+  │  (optional)  │
+  └──────────────┘
 ```
 
-- **Backend** (`server.js` + `src/`) — Express API proxy + WebSocket hub, adaptive polling, resource monitor, headless LS manager
+- **Backend** (`server.js` + `src/`) — Express API proxy + WebSocket hub, adaptive polling, resource monitor, headless LS manager, agent session manager, orchestrator
 - **Frontend** (`frontend/`) — Next.js 16 + React 19 + shadcn/ui + Tailwind CSS 4
 
 ---
