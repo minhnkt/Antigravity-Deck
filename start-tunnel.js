@@ -218,11 +218,20 @@ async function runTunnel() {
     // Kill stale processes
     killStaleProcesses([BE_PORT, FE_PORT]);
 
+    // Named tunnel configuration
+    const TUNNEL_NAME = process.env.TUNNEL_NAME || 'antigravity-deck';
+    const FE_DOMAIN = process.env.FE_DOMAIN || 'deck.mtrim.net';
+    const BE_DOMAIN = process.env.BE_DOMAIN || 'deck-api.mtrim.net';
+
     const crypto = require('crypto');
     const authKey = process.env.AUTH_KEY || crypto.randomBytes(16).toString('hex');
+    beUrl = `https://${BE_DOMAIN}`;
+    feUrl = `https://${FE_DOMAIN}`;
 
     if (!QUIET) {
-        console.log('\n\x1b[1m  🚀 Antigravity Deck — Starting with Cloudflare Tunnel\x1b[0m');
+        console.log('\n\x1b[1m  🚀 Antigravity Deck — Starting with Cloudflare Named Tunnel\x1b[0m');
+        console.log(`  🌐 Frontend: \x1b[36m${feUrl}\x1b[0m`);
+        console.log(`  🔌 Backend:  \x1b[36m${beUrl}\x1b[0m`);
         console.log(`  🔑 Auth Key: \x1b[33m${authKey}\x1b[0m\n`);
     }
 
@@ -235,49 +244,33 @@ async function runTunnel() {
     });
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Step 2: Start backend tunnel
-    progress('Starting backend tunnel...');
-    log('*', 'Starting Cloudflare tunnel for backend...');
-    const tunBe = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${BE_PORT}`], {
-        stdio: ['ignore', 'pipe', 'pipe'], shell: true
-    });
-    allProcs.push(tunBe);
-
-    beUrl = await new Promise((resolve) => {
-        const timeout = setTimeout(() => { log('*', '⚠️  Timed out waiting for backend tunnel URL'); resolve(null); }, 30000);
-        let buffer = '';
-        const handler = (data) => {
-            const text = data.toString();
-            buffer += text;
-            text.split('\n').filter(l => l.trim()).forEach(l => log('TUN-BE', l.trim()));
-            // Detect Cloudflare rate limit
-            if (buffer.includes('429') || buffer.includes('Too Many Requests') || buffer.includes('error code: 1015')) {
-                clearTimeout(timeout);
-                resolve('RATE_LIMITED');
-                return;
+    // Step 2: Build frontend with the known backend URL
+    const nextDir = path.join(__dirname, 'frontend', '.next');
+    const portFile = path.join(nextDir, '.backend-port');
+    const urlFile = path.join(nextDir, '.backend-url');
+    let needBuild = FORCE_BUILD || !fs.existsSync(nextDir);
+    if (!needBuild) {
+        try {
+            const builtPort = fs.readFileSync(portFile, 'utf8').trim();
+            const builtUrl = fs.readFileSync(urlFile, 'utf8').trim();
+            if (builtPort !== String(BE_PORT) || builtUrl !== beUrl) {
+                log('*', `⚠️  Build mismatch (port: ${builtPort}→${BE_PORT}, url: ${builtUrl}→${beUrl}) — rebuilding...`);
+                needBuild = true;
             }
-            const url = extractTunnelUrl(buffer);
-            if (url) { clearTimeout(timeout); resolve(url); }
-        };
-        tunBe.stdout?.on('data', handler);
-        tunBe.stderr?.on('data', handler);
-    });
-
-    if (beUrl === 'RATE_LIMITED') {
-        console.error('\n\x1b[33m  ⚠️  Cloudflare rate limit (429 Too Many Requests)\x1b[0m');
-        console.error('  You have created too many Quick Tunnels in a short time.');
-        console.error('  Please wait 5-10 minutes and try again.');
-        console.error('  Or use local mode: \x1b[1mnode start-tunnel.js --local\x1b[0m\n');
-        process.exit(1);
+        } catch {
+            log('*', '⚠️  No build markers found — rebuilding...');
+            needBuild = true;
+        }
     }
-    if (!beUrl) { log('*', '❌ Failed to get backend tunnel URL'); process.exit(1); }
-    log('*', `✅ Backend tunnel: ${beUrl}`);
+    if (needBuild) {
+        buildFrontend({ NEXT_PUBLIC_BACKEND_URL: beUrl, NEXT_PUBLIC_BACKEND_PORT: String(BE_PORT) });
+        try { fs.writeFileSync(portFile, String(BE_PORT)); } catch { }
+        try { fs.writeFileSync(urlFile, beUrl); } catch { }
+    } else {
+        log('*', '✅ Frontend already built for this config (use --build to force rebuild)');
+    }
 
-    // Step 3: Build frontend (always — needs NEXT_PUBLIC_BACKEND_URL baked in)
-    buildFrontend({ NEXT_PUBLIC_BACKEND_URL: beUrl, NEXT_PUBLIC_BACKEND_PORT: String(BE_PORT) });
-    try { fs.writeFileSync(path.join(__dirname, 'frontend', '.next', '.backend-port'), String(BE_PORT)); } catch { }
-
-    // Step 4: Start frontend
+    // Step 3: Start frontend
     progress('Starting frontend...');
     log('*', `Starting frontend on port ${FE_PORT}...`);
     const fe = startProcess('FE', 'npx', ['next', 'start', '--port', String(FE_PORT)], {
@@ -286,88 +279,56 @@ async function runTunnel() {
     });
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Step 5: Start frontend tunnel
-    progress('Starting frontend tunnel...');
-    log('*', 'Starting Cloudflare tunnel for frontend...');
-    const tunFe = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${FE_PORT}`], {
-        stdio: ['ignore', 'pipe', 'pipe'], shell: true
-    });
-    allProcs.push(tunFe);
-
-    feUrl = await new Promise((resolve) => {
-        const timeout = setTimeout(() => { log('*', '⚠️  Timed out waiting for frontend tunnel URL'); resolve(null); }, 30000);
-        let buffer = '';
-        const handler = (data) => {
-            const text = data.toString();
-            buffer += text;
-            text.split('\n').filter(l => l.trim()).forEach(l => log('TUN-FE', l.trim()));
-            // Detect Cloudflare rate limit
-            if (buffer.includes('429') || buffer.includes('Too Many Requests') || buffer.includes('error code: 1015')) {
-                clearTimeout(timeout);
-                console.error('\n\x1b[33m  ⚠️  Cloudflare rate limit on frontend tunnel (429)\x1b[0m');
-                console.error('  Backend tunnel is working. Wait 5-10 min and try again.\n');
-                resolve(null);
-                return;
-            }
-            const url = extractTunnelUrl(buffer);
-            if (url) { clearTimeout(timeout); resolve(url); }
-        };
-        tunFe.stdout?.on('data', handler);
-        tunFe.stderr?.on('data', handler);
+    // Step 4: Start named Cloudflare tunnel (serves both frontend + backend via config.yml)
+    progress('Starting named tunnel...');
+    log('*', `Starting named Cloudflare tunnel: ${TUNNEL_NAME}...`);
+    const tun = startProcess('TUN', CLOUDFLARED, ['tunnel', 'run', TUNNEL_NAME], {
+        env: { ...process.env }
     });
 
-    const qrUrl = feUrl ? `${feUrl}?key=${authKey}` : null;
+    // Wait for tunnel to register
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    const qrUrl = `${feUrl}?key=${authKey}`;
     if (QUIET) process.stdout.write('\r\x1b[K');
 
-    if (feUrl) {
-        console.log('\n' + '='.repeat(60));
-        console.log('\x1b[1m\x1b[32m  🌐 READY! Open this URL on any device:\x1b[0m');
-        console.log(`\x1b[1m  👉 ${feUrl}\x1b[0m`);
-        console.log(`  🔑 Key: \x1b[33m${authKey}\x1b[0m`);
-        console.log('='.repeat(60));
-        console.log(`  Backend API: ${beUrl}`);
-        console.log(`  Local:       http://localhost:${FE_PORT}`);
-        console.log('='.repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('\x1b[1m\x1b[32m  🌐 READY! Open this URL on any device:\x1b[0m');
+    console.log(`\x1b[1m  👉 ${feUrl}\x1b[0m`);
+    console.log(`  🔑 Key: \x1b[33m${authKey}\x1b[0m`);
+    console.log('='.repeat(60));
+    console.log(`  Backend API: ${beUrl}`);
+    console.log(`  Local FE:    http://localhost:${FE_PORT}`);
+    console.log(`  Local BE:    http://localhost:${BE_PORT}`);
+    console.log('='.repeat(60));
 
-        console.log('\n\x1b[1m  📱 Scan this QR code to open (auto-login):\x1b[0m\n');
-        try {
-            const qrcode = require('qrcode-terminal');
-            qrcode.generate(qrUrl, { small: true }, (qr) => {
-                console.log(qr.split('\n').map(l => '    ' + l).join('\n'));
-                console.log(`\n  🔗 ${qrUrl}`);
-                console.log(`  💻 Local: \x1b[36mhttp://localhost:${FE_PORT}/?key=${authKey}\x1b[0m\n`);
-            });
-        } catch {
-            console.log(`  (qrcode-terminal not installed — scan URL manually)`);
-            console.log(`  🔗 ${qrUrl}`);
+    console.log('\n\x1b[1m  📱 Scan this QR code to open (auto-login):\x1b[0m\n');
+    try {
+        const qrcode = require('qrcode-terminal');
+        qrcode.generate(qrUrl, { small: true }, (qr) => {
+            console.log(qr.split('\n').map(l => '    ' + l).join('\n'));
+            console.log(`\n  🔗 ${qrUrl}`);
             console.log(`  💻 Local: \x1b[36mhttp://localhost:${FE_PORT}/?key=${authKey}\x1b[0m\n`);
-        }
-    } else {
-        log('*', '⚠️  Frontend tunnel failed, but local access still works');
-        console.log(`  Local: http://localhost:${FE_PORT}`);
+        });
+    } catch {
+        console.log(`  (qrcode-terminal not installed — scan URL manually)`);
+        console.log(`  🔗 ${qrUrl}`);
+        console.log(`  💻 Local: \x1b[36mhttp://localhost:${FE_PORT}/?key=${authKey}\x1b[0m\n`);
     }
 
     // Write tunnel info file
     const infoFile = path.join(__dirname, '.tunnel-info.txt');
     const info = [
-        `Frontend: ${feUrl || 'FAILED'}`,
-        `Backend:  ${beUrl || 'FAILED'}`,
+        `Frontend: ${feUrl}`,
+        `Backend:  ${beUrl}`,
         `Auth Key: ${authKey}`,
-        `QR URL:   ${qrUrl || 'N/A'}`,
+        `QR URL:   ${qrUrl}`,
         `Local FE: http://localhost:${FE_PORT}`,
         `Local BE: http://localhost:${BE_PORT}`,
         `Started:  ${new Date().toISOString()}`,
     ].join('\n');
     fs.writeFileSync(infoFile, info);
     log('*', `Tunnel info written to ${infoFile}`);
-
-    // Keep remaining output flowing
-    if (!QUIET) {
-        tunBe.stdout?.on('data', d => d.toString().split('\n').filter(l => l.trim()).forEach(l => log('TUN-BE', l.trim())));
-        tunBe.stderr?.on('data', d => d.toString().split('\n').filter(l => l.trim()).forEach(l => log('TUN-BE', l.trim())));
-        tunFe.stdout?.on('data', d => d.toString().split('\n').filter(l => l.trim()).forEach(l => log('TUN-FE', l.trim())));
-        tunFe.stderr?.on('data', d => d.toString().split('\n').filter(l => l.trim()).forEach(l => log('TUN-FE', l.trim())));
-    }
 
     console.log('\n  Press Ctrl+C to stop\n');
 }
